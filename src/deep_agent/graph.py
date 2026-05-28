@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-import contextlib
 from datetime import datetime, timezone
 
 from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
 from deepagents import create_deep_agent
+from deepagents.middleware import SummarizationMiddleware
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+
+from deep_agent.sub_agents import get_sub_agents
 from model_provider import deepseek_model
 from langchain_daytona import DaytonaSandbox
 from langgraph.checkpoint.memory import MemorySaver
 import os
 from dotenv import load_dotenv
-from deepagents.backends.filesystem import FilesystemBackend
 
+from tools.file_tool import read_file, save_to_pdf, save_to_markdown
+from tools.search_tool import search_tool
 from tools.install_skill import install_skill_from_url
 from utils.path import get_root_path
 
@@ -53,26 +56,7 @@ def utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
-SUBAGENTS = [
-    {
-        "name": "researcher",
-        "description": "Use for evidence collection and source-grounded fact finding.",
-        "system_prompt": (
-            "You are a focused researcher. Gather evidence, list assumptions, and "
-            "report contradictions clearly."
-        ),
-        "tools": [utc_now],
-    },
-    {
-        "name": "critic",
-        "description": "Use for adversarial review of drafts and plans.",
-        "system_prompt": (
-            "You are a critical reviewer. Find weak logic, untested assumptions, and "
-            "missing constraints."
-        ),
-        "tools": [utc_now],
-    },
-]
+
 root_path = get_root_path()
 print(f"root_path:${root_path}\n")
 client = Daytona(config=daytona_config)
@@ -97,14 +81,20 @@ def build_agent(config:RunnableConfig):
     backend = DaytonaSandbox(sandbox=sandbox)
     return create_deep_agent(
         model=DEFAULT_MODEL,
-        tools=[utc_now, install_skill_from_url],
+        tools=[utc_now, install_skill_from_url,search_tool,read_file,save_to_pdf,save_to_markdown],
         backend=backend,
         system_prompt=SYSTEM_PROMPT,
         # backend=FilesystemBackend(
         #     root_dir=root_path,
         #     virtual_mode = True
         # ),
-        subagents=SUBAGENTS,
+        memory=["/home/daytona/AGENTS.md", "/home/daytona/.deepagents/preferences.md"],
+        subagents=get_sub_agents(),
+        middleware=[SummarizationMiddleware(
+            backend=backend,
+            trigger=("fraction", 0.8),
+            keep={"messages",3},
+        )],
         checkpointer=checkpointer,
         skills=["/skills"],
         # You can disable these if you want to run without interrupts

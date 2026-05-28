@@ -1,7 +1,4 @@
 # MiloAgent
-
-All agents are defined in `src/deep_agent/graph.py`.
-
 ## Conventions
 
 - Prefer async-native code wherever possible for performance. Tools, tests, and any new I/O should use async.
