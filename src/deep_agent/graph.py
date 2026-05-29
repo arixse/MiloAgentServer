@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
@@ -18,6 +19,7 @@ import os
 from dotenv import load_dotenv
 
 from tools.file_tool import read_file, save_to_pdf, save_to_markdown, generate_download_url
+from tools.mcp_tool import get_mcp_tools
 from tools.search_tool import search_tool, fetch_content
 from tools.install_skill import install_skill_from_url
 from utils.path import get_root_path
@@ -50,6 +52,8 @@ daytona_config = DaytonaConfig(
     api_key=os.getenv("DAYTONA_API_KEY")
 )
 
+mcp_tools = asyncio.run(get_mcp_tools())
+
 @tool
 def utc_now() -> str:
     """Return the current UTC timestamp in ISO format."""
@@ -81,7 +85,7 @@ def build_agent(config:RunnableConfig):
     backend = DaytonaSandbox(sandbox=sandbox)
     return create_deep_agent(
         model=DEFAULT_MODEL,
-        tools=[utc_now, install_skill_from_url,search_tool,read_file,save_to_pdf,save_to_markdown,generate_download_url,fetch_content],
+        tools=[utc_now, install_skill_from_url,search_tool,read_file,save_to_pdf,save_to_markdown,generate_download_url,fetch_content,*mcp_tools],
         backend=backend,
         system_prompt=SYSTEM_PROMPT,
         # backend=FilesystemBackend(
