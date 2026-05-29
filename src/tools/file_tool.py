@@ -127,7 +127,7 @@ def _generate_pdf_bytes(text: str) -> bytes:
     return pdf.output()
 
 
-# @tool
+@tool
 def read_file(file_path: str, config: RunnableConfig) -> str:
     """读取 sandbox 中的文件内容，支持 .pdf / .md / .docx / .xlsx / .pptx / .txt 等格式。
 
@@ -150,7 +150,7 @@ def read_file(file_path: str, config: RunnableConfig) -> str:
         return f"读取文件失败: {e}"
 
 
-# @tool
+@tool
 def save_to_markdown(text: str, file_name: str, config: RunnableConfig) -> str:
     """将 text 保存为 markdown 文件到 sandbox 的 /tmp 目录。
 
@@ -172,7 +172,7 @@ def save_to_markdown(text: str, file_name: str, config: RunnableConfig) -> str:
         return f"保存 markdown 文件失败: {e}"
 
 
-# @tool
+@tool
 def save_to_pdf(text: str, file_name: str, config: RunnableConfig) -> str:
     """将 text 保存为 PDF 文件到 sandbox 的 /tmp 目录。
 
@@ -193,4 +193,42 @@ def save_to_pdf(text: str, file_name: str, config: RunnableConfig) -> str:
         return f"文件已保存至 {remote_path}"
     except Exception as e:
         return f"保存 PDF 文件失败: {e}"
+
+HTTP_SERVE_PORT = 8765
+
+
+def _ensure_http_server(sandbox) -> None:
+    check = sandbox.process.exec(
+        f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{HTTP_SERVE_PORT}/ 2>/dev/null"
+    )
+    if check.exit_code == 0 and check.result.strip() == "200":
+        return None
+
+    sandbox.process.exec(
+        f"pkill -f 'http.server {HTTP_SERVE_PORT}' 2>/dev/null; "
+        f"nohup python -m http.server {HTTP_SERVE_PORT} --bind 0.0.0.0 --directory / > /dev/null 2>&1 &"
+    )
+    return None
+
+
+@tool
+def generate_download_url(file_path: str, config: RunnableConfig) -> str:
+    """Generate a public download URL for a file in the sandbox.
+
+    Starts an HTTP server in the sandbox if not already running,
+    then creates a preview link pointing to the file.
+
+    Args:
+        file_path: Absolute path to the file in the sandbox, e.g. "/tmp/report.pdf".
+    Returns:
+        Public download URL for the file.
+    """
+    try:
+        sandbox = _get_sandbox(config)
+        _ensure_http_server(sandbox)
+        preview = sandbox.get_preview_link(HTTP_SERVE_PORT)
+        return f"{preview.url.rstrip('/')}{file_path}"
+    except Exception as e:
+        return f"Failed to generate download URL: {e}"
+
 

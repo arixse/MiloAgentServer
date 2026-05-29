@@ -17,8 +17,8 @@ from langgraph.checkpoint.memory import MemorySaver
 import os
 from dotenv import load_dotenv
 
-from tools.file_tool import read_file, save_to_pdf, save_to_markdown
-from tools.search_tool import search_tool
+from tools.file_tool import read_file, save_to_pdf, save_to_markdown, generate_download_url
+from tools.search_tool import search_tool, fetch_content
 from tools.install_skill import install_skill_from_url
 from utils.path import get_root_path
 
@@ -81,7 +81,7 @@ def build_agent(config:RunnableConfig):
     backend = DaytonaSandbox(sandbox=sandbox)
     return create_deep_agent(
         model=DEFAULT_MODEL,
-        tools=[utc_now, install_skill_from_url,search_tool,read_file,save_to_pdf,save_to_markdown],
+        tools=[utc_now, install_skill_from_url,search_tool,read_file,save_to_pdf,save_to_markdown,generate_download_url,fetch_content],
         backend=backend,
         system_prompt=SYSTEM_PROMPT,
         # backend=FilesystemBackend(
@@ -90,11 +90,12 @@ def build_agent(config:RunnableConfig):
         # ),
         memory=["/home/daytona/AGENTS.md", "/home/daytona/.deepagents/preferences.md"],
         subagents=get_sub_agents(),
-        middleware=[SummarizationMiddleware(
-            backend=backend,
-            trigger=("fraction", 0.8),
-            keep={"messages",3},
-        )],
+        # middleware=[SummarizationMiddleware(
+        #     model=DEFAULT_MODEL,
+        #     backend=backend,
+        #     trigger=("tokens", 100000),
+        #     keep=("messages",5),
+        # )],
         checkpointer=checkpointer,
         skills=["/skills"],
         # You can disable these if you want to run without interrupts
