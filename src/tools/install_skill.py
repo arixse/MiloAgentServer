@@ -11,6 +11,7 @@ from daytona import Daytona, DaytonaConfig
 from dotenv import load_dotenv
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from playwright.sync_api import sync_playwright
 
 load_dotenv()
 
@@ -132,20 +133,31 @@ def _get_clawhub_download_url(page_html: str, base_url: str) -> str | None:
     return None
 
 
-def _get_modelscope_download_url(page_html: str, base_url: str) -> str | None:
-    """Parse the <a download> tag href from a ModelScope skill page."""
-    soup = BeautifulSoup(page_html, "html.parser")
+def _get_modelscope_download_url(skill_url: str) -> str | None:
+    """Use Playwright to render the ModelScope page (exec JS), then parse <a download> tag."""
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            page.goto(skill_url, wait_until="networkidle", timeout=30000)
+            # 额外等待确保动态内容渲染完成
+            page.wait_for_timeout(2000)
+            html = page.content()
+        finally:
+            browser.close()
+
+    soup = BeautifulSoup(html, "html.parser")
 
     for a_tag in soup.find_all("a", attrs={"download": True}, href=True):
         href = a_tag.get("href", "").strip()
         if href:
-            return urljoin(base_url, href)
+            return urljoin(skill_url, href)
 
     # Fallback: look for any href containing .zip
     for a_tag in soup.find_all("a", href=True):
         href = a_tag.get("href", "").strip()
         if ".zip" in href:
-            return urljoin(base_url, href)
+            return urljoin(skill_url, href)
 
     return None
 
@@ -215,12 +227,7 @@ def install_skill_from_modelscope_url(skill_url: str, config: RunnableConfig) ->
     Returns:
         skill 安装状态描述。
     """
-    with httpx.Client(follow_redirects=True, timeout=30) as http:
-        resp = http.get(skill_url)
-        resp.raise_for_status()
-        page_html = resp.text
-
-    download_url = _get_modelscope_download_url(page_html, skill_url)
+    download_url = _get_modelscope_download_url(skill_url)
     if not download_url:
         return f"未在页面 {skill_url} 中找到 skill 下载链接"
 
