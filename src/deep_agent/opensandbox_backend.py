@@ -18,9 +18,10 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 from deepagents.backends.sandbox import BaseSandbox
-from opensandbox import Sandbox
+from opensandbox import Sandbox, SandboxSync
 from dotenv import load_dotenv
-from opensandbox.config import ConnectionConfig
+from opensandbox.config import ConnectionConfig, ConnectionConfigSync
+from opensandbox.models.execd import RunCommandOpts
 
 load_dotenv()
 
@@ -87,139 +88,74 @@ async def _delete_sandbox_mapping(thread_id: str) -> None:
 class OpenSandboxBackend(BaseSandbox):
     """OpenSandbox 异步沙盒后端。
 
-    实现了 DeepAgents 要求的文件读写与命令执行协议。
-    所有同步方法内部委托给对应的异步方法，确保在任何调用路径下都能正常工作。
+    实现了 DeepAgents 要求的文件读写与命令执行协议
     """
 
-    def __init__(self, sandbox: Sandbox) -> None:
-        self._sandbox = sandbox
-        self._default_timeout = 300  # 默认执行超时时间（秒）
+    def __init__(self, sandbox: SandboxSync):
+        self.sandbox = sandbox
 
-    @property
     def id(self) -> str:
-        # OpenSandbox 的 sandbox 对象通常带有 id 属性作为唯一标识
-        return getattr(self._sandbox, "id", "unknown-sandbox-id")
+        return self.sandbox.id
 
-    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
-        return asyncio.run(self.aexecute(command, timeout=timeout))
-
-    async def aexecute(
-            self, command: str, *, timeout: int | None = None
+    def execute(
+            self,
+            command: str,
+            *,
+            timeout: int | None = None,
     ) -> ExecuteResponse:
-        """在沙盒内异步执行 Shell 命令"""
-        effective_timeout = timeout if timeout is not None else self._default_timeout
-        # 调用 OpenSandbox 的命令执行接口
-        print(f"执行命令: {command}")
-        execution = await self._sandbox.commands.run(
-            command
+        """Execute a shell command inside the sandbox."""
+        result = self.sandbox.commands.run(
+            command,
+            opts=RunCommandOpts(
+                timeout=timedelta(seconds=timeout) if timeout else None,
+            )
         )
-
-        # 拼接标准输出和错误输出
-        stdout = "\n".join([log.text for log in execution.logs.stdout]) if execution.logs.stdout else ""
-        stderr = "\n".join([log.text for log in execution.logs.stderr]) if execution.logs.stderr else ""
-
-        output = stdout
-        if stderr:
-            output += "\n" + stderr if output else stderr
-
+        output = result.logs.stdout[0].text if result.logs.stdout else ''
+        if result.logs.stderr:
+            output += f"\n<stderr>{result.logs.stderr[0].text}</stderr>"
         return ExecuteResponse(
+            exit_code=result.exit_code,
             output=output,
-            exit_code=execution.exit_code,
-            truncated=False,
         )
-
-    # ------------------------------------------------------------------
-    # write / awrite
-    # ------------------------------------------------------------------
-
-    def write(self, file_path: str, content: str) -> WriteResult:
-        return asyncio.run(self.awrite(file_path, content))
-
-    async def awrite(self, file_path: str, content: str) -> WriteResult:
-        """异步写入文件到沙盒内"""
-        try:
-            # OpenSandbox 写入文件需要传入 WriteEntry 列表
-            from opensandbox.models import WriteEntry
-            await self._sandbox.files.write_files([
-                WriteEntry(path=file_path, data=content, mode=0o644)
-            ])
-            return WriteResult(path=file_path, files_update=None)
-        except Exception as e:
-            return WriteResult(error=f"写入文件 '{file_path}' 失败: {e}")
-
-    # ------------------------------------------------------------------
-    # download_files / adownload_files
-    # ------------------------------------------------------------------
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        return asyncio.run(self.adownload_files(paths))
-
-    async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        """异步从沙盒内下载（读取）文件"""
-        responses: list[FileDownloadResponse] = []
+        """Download files from the sandbox."""
+        responses = []
         for path in paths:
-            try:
-                # 读取文件内容（返回 bytes 或 str，根据 SDK 版本适配）
-                content = await self._sandbox.files.read_file(path)
-                # 确保 content 为 bytes 格式以适配协议
-                if isinstance(content, str):
-                    content = content.encode("utf-8")
-                responses.append(
-                    FileDownloadResponse(path=path, content=content, error=None)
-                )
-            except Exception as e:
-                responses.append(
-                    FileDownloadResponse(path=path, content=b"", error=str(e))
-                )
+            content = self.sandbox.files.read_bytes(path)
+            responses.append(FileDownloadResponse(path=path, content=content, error=None))
         return responses
-
-    # ------------------------------------------------------------------
-    # upload_files / aupload_files
-    # ------------------------------------------------------------------
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
-        return asyncio.run(self.aupload_files(files))
-
-    async def aupload_files(
-            self, files: list[tuple[str, bytes]]
-    ) -> list[FileUploadResponse]:
-        """异步上传文件到沙盒内"""
-        responses: list[FileUploadResponse] = []
-        from opensandbox.models import WriteEntry
-
-        # 准备批量写入的条目
-        write_entries = []
+        """Upload files into the sandbox."""
+        responses = []
         for path, content in files:
-            write_entries.append(WriteEntry(path=path, data=content, mode=0o644))
-
-        try:
-            await self._sandbox.files.write_files(write_entries)
-            for path, _ in files:
-                responses.append(FileUploadResponse(path=path, error=None))
-        except Exception as e:
-            for path, _ in files:
-                responses.append(FileUploadResponse(path=path, error=str(e)))
+            if not path.startswith("/"):
+                responses.append(FileUploadResponse(path=path, error="invalid_path"))
+                continue
+            self.sandbox.files.write_file(path, content)
+            responses.append(FileUploadResponse(path=path, error=None))
         return responses
 
-    async def close(self):
-        """销毁沙盒实例，释放资源"""
-        await self._sandbox.kill()
+    def close(self) -> None:
+        """Close the sandbox."""
+        if self.sandbox:
+            self.sandbox.kill()
 
-
-def _get_connection_config() -> ConnectionConfig:
+def _get_connection_config() -> ConnectionConfigSync:
     """获取 OpenSandbox 连接配置。"""
-    return ConnectionConfig(
+    return ConnectionConfigSync(
         domain="http://182.254.183.29:8080",
         use_server_proxy=True,
         api_key=os.getenv("OPENSANDBOX_API_KEY"),
     )
 
 
-async def _create_sandbox_instance() -> Sandbox:
+def _create_sandbox_instance() -> SandboxSync:
     """创建新的 OpenSandbox 沙盒实例。"""
     config = _get_connection_config()
     print("------------------restart----------------------")
-    sandbox = await Sandbox.create(
+    sandbox = SandboxSync.create(
         "opensandbox/code-interpreter:v1.0.2",
         connection_config=config,
         entrypoint=["/opt/opensandbox/code-interpreter.sh"],
@@ -258,14 +194,14 @@ async def get_or_create_sandbox(thread_id: str) -> OpenSandboxBackend:
             # 尝试重连到已有的沙盒实例
             print(f"[Redis] 正在尝试重连 sandbox: {sandbox_id} ...")
             config = _get_connection_config()
-            sandbox = await Sandbox.connect(
+            sandbox = SandboxSync.connect(
                 sandbox_id,
                 connection_config=config,
                 connect_timeout=timedelta(seconds=10),
             )
             # 健康检查：执行一个简单命令验证沙盒是否真正可用
             try:
-                result = await sandbox.commands.run(
+                result = sandbox.commands.run(
                     "echo ok"
                 )
                 if result.exit_code != 0:
@@ -276,7 +212,7 @@ async def get_or_create_sandbox(thread_id: str) -> OpenSandboxBackend:
                 print(
                     f"[Redis] sandbox 健康检查失败 (sandbox_id={sandbox_id}): {health_err}"
                 )
-                await sandbox.kill()
+                sandbox.kill()
                 raise
 
             backend = OpenSandboxBackend(sandbox)
@@ -296,15 +232,15 @@ async def get_or_create_sandbox(thread_id: str) -> OpenSandboxBackend:
             await _delete_sandbox_mapping(thread_id)
 
     # 3. 创建新的沙盒实例
-    sandbox = await _create_sandbox_instance()
+    sandbox = _create_sandbox_instance()
     backend = OpenSandboxBackend(sandbox)
     _backends[thread_id] = backend
 
     # 4. 将映射关系持久化到 Redis
-    await _store_sandbox_mapping(thread_id, backend.id)
+    await _store_sandbox_mapping(thread_id, backend.sandbox.id)
     print(
         f"[Redis] sandbox 映射已存储: thread_id={thread_id}, "
-        f"sandbox_id={backend.id}"
+        f"sandbox_id={backend.sandbox.id}"
     )
 
     return backend
@@ -313,7 +249,7 @@ async def get_or_create_sandbox(thread_id: str) -> OpenSandboxBackend:
 async def cleanup_sandbox(thread_id: str):
     """在对话结束后清理并销毁指定的沙盒实例"""
     if backend := _backends.pop(thread_id, None):
-        await backend.close()
+        backend.close()
     # 同时清理 Redis 中的映射记录
     await _delete_sandbox_mapping(thread_id)
     print(f"[Redis] sandbox 映射已清理: thread_id={thread_id}")
