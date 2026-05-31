@@ -5,15 +5,14 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
 from deepagents import create_deep_agent
 from deepagents.middleware import SummarizationMiddleware
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
+from deep_agent.opensandbox_backend import get_or_create_sandbox
 from deep_agent.sub_agents import get_sub_agents
 from model_provider import deepseek_model
-from langchain_daytona import DaytonaSandbox
 import os
 from dotenv import load_dotenv
 
@@ -46,9 +45,7 @@ Workflow:
 - State unresolved uncertainty explicitly.
 - Keep output compact unless the user asks for depth.
 """.strip()
-daytona_config = DaytonaConfig(
-    api_key=os.getenv("DAYTONA_API_KEY")
-)
+
 
 @tool
 def utc_now() -> str:
@@ -59,7 +56,6 @@ def utc_now() -> str:
 
 root_path = get_root_path()
 print(f"root_path:${root_path}\n")
-client = Daytona(config=daytona_config)
 
 async def build_agent(config:RunnableConfig):
     mcp_tools = await get_mcp_tools()
@@ -67,22 +63,8 @@ async def build_agent(config:RunnableConfig):
     search_tools = get_search_tools()
     file_tools = get_file_tools()
     thread_id = config["configurable"]["thread_id"]
-    try:
-        sandbox = client.get(f"sandbox_{thread_id}")
-        print(f"find one:{thread_id}")
-        print(sandbox)
-    except Exception:
-        print(f"not find one:{thread_id}")
-        try:
-            sandbox = client.create(
-                CreateSandboxFromSnapshotParams(
-                    name=f"sandbox_{thread_id}",
-                    auto_delete_interval=3600,  # TTL: clean up when idle
-                )
-            )
-        except Exception as e:
-            raise ValueError(f"Failed to create sandbox: {e}")
-    backend = DaytonaSandbox(sandbox=sandbox)
+    # 获取或创建 sandbox，同时将 thread_id ↔ sandbox 映射持久化到 Redis (localhost:6379)
+    backend = await get_or_create_sandbox(thread_id)
     return create_deep_agent(
         model=DEFAULT_MODEL,
         tools=[utc_now,*file_tools,*search_tools,*mcp_tools,*skill_tools],
@@ -92,7 +74,7 @@ async def build_agent(config:RunnableConfig):
         #     root_dir=root_path,
         #     virtual_mode = True
         # ),
-        memory=["/home/daytona/AGENTS.md", "/home/daytona/.deepagents/preferences.md"],
+        memory=["/workspace/AGENTS.md", "/workspace/.deepagents/preferences.md"],
         subagents=get_sub_agents(),
         # middleware=[SummarizationMiddleware(
         #     model=DEFAULT_MODEL,
