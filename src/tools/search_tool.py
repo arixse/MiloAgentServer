@@ -80,3 +80,7 @@ def fetch_content(url: str) -> str:
 
     except Exception as e:
         return f"获取网页内容失败: {e}"
+
+# 获取搜索相关的工具列表
+def get_search_tools():
+    return [search_tool, fetch_content]

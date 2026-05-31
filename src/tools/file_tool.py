@@ -212,7 +212,7 @@ def _ensure_http_server(sandbox) -> None:
 
 
 @tool
-def generate_download_url(file_path: str, config: RunnableConfig) -> str:
+def generate_download_url_from_sandbox(file_path: str, config: RunnableConfig) -> str:
     """Generate a public download URL for a file in the sandbox.
 
     Starts an HTTP server in the sandbox if not already running,
@@ -231,3 +231,6 @@ def generate_download_url(file_path: str, config: RunnableConfig) -> str:
     except Exception as e:
         return f"Failed to generate download URL: {e}"
 
+# 获取文件相关的tools
+def get_file_tools():
+    return [read_file, save_to_pdf, save_to_markdown, generate_download_url_from_sandbox]

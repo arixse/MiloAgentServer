@@ -17,10 +17,10 @@ from langchain_daytona import DaytonaSandbox
 import os
 from dotenv import load_dotenv
 
-from tools.file_tool import read_file, save_to_pdf, save_to_markdown, generate_download_url
+from tools.file_tool import get_file_tools
 from tools.mcp_tool import get_mcp_tools
-from tools.search_tool import search_tool, fetch_content
-from tools.install_skill import install_skill_from_url
+from tools.search_tool import get_search_tools
+from tools.install_skill import get_skill_tools
 from utils.path import get_root_path
 
 root_path = get_root_path()
@@ -63,6 +63,9 @@ client = Daytona(config=daytona_config)
 
 async def build_agent(config:RunnableConfig):
     mcp_tools = await get_mcp_tools()
+    skill_tools = get_skill_tools()
+    search_tools = get_search_tools()
+    file_tools = get_file_tools()
     thread_id = config["configurable"]["thread_id"]
     try:
         sandbox = client.get(f"sandbox_{thread_id}")
@@ -82,7 +85,7 @@ async def build_agent(config:RunnableConfig):
     backend = DaytonaSandbox(sandbox=sandbox)
     return create_deep_agent(
         model=DEFAULT_MODEL,
-        tools=[utc_now, install_skill_from_url,search_tool,read_file,save_to_pdf,save_to_markdown,generate_download_url,fetch_content,*mcp_tools],
+        tools=[utc_now,*file_tools,*search_tools,*mcp_tools,*skill_tools],
         backend=backend,
         system_prompt=SYSTEM_PROMPT,
         # backend=FilesystemBackend(
@@ -92,7 +95,7 @@ async def build_agent(config:RunnableConfig):
         memory=["/home/daytona/AGENTS.md", "/home/daytona/.deepagents/preferences.md"],
         subagents=get_sub_agents(),
         # middleware=[SummarizationMiddleware(
-        #     model=DEFAULT_MODEL,   
+        #     model=DEFAULT_MODEL,
         #     backend=backend,
         #     trigger=("tokens", 100000),
         #     keep=("messages",5),
