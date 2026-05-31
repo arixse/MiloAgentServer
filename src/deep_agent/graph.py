@@ -14,7 +14,6 @@ from langchain_core.tools import tool
 from deep_agent.sub_agents import get_sub_agents
 from model_provider import deepseek_model
 from langchain_daytona import DaytonaSandbox
-from langgraph.checkpoint.memory import MemorySaver
 import os
 from dotenv import load_dotenv
 
@@ -33,7 +32,6 @@ print(f"skill_path:${skill_path}\n")
 load_dotenv()
 # DEFAULT_MODEL = os.getenv("DEEP_AGENT_MODEL", "anthropic:claude-sonnet-4-6")
 DEFAULT_MODEL=deepseek_model
-checkpointer = MemorySaver()
 SYSTEM_PROMPT = """
 You are a deep agent.
 
@@ -52,8 +50,6 @@ daytona_config = DaytonaConfig(
     api_key=os.getenv("DAYTONA_API_KEY")
 )
 
-mcp_tools = asyncio.run(get_mcp_tools())
-
 @tool
 def utc_now() -> str:
     """Return the current UTC timestamp in ISO format."""
@@ -65,7 +61,8 @@ root_path = get_root_path()
 print(f"root_path:${root_path}\n")
 client = Daytona(config=daytona_config)
 
-def build_agent(config:RunnableConfig):
+async def build_agent(config:RunnableConfig):
+    mcp_tools = await get_mcp_tools()
     thread_id = config["configurable"]["thread_id"]
     try:
         sandbox = client.get(f"sandbox_{thread_id}")
@@ -95,12 +92,11 @@ def build_agent(config:RunnableConfig):
         memory=["/home/daytona/AGENTS.md", "/home/daytona/.deepagents/preferences.md"],
         subagents=get_sub_agents(),
         # middleware=[SummarizationMiddleware(
-        #     model=DEFAULT_MODEL,
+        #     model=DEFAULT_MODEL,   
         #     backend=backend,
         #     trigger=("tokens", 100000),
         #     keep=("messages",5),
         # )],
-        checkpointer=checkpointer,
         skills=["/skills"],
         # You can disable these if you want to run without interrupts
         # interrupt_on={
@@ -110,3 +106,9 @@ def build_agent(config:RunnableConfig):
 
 
 
+config = {
+    "configurable":{
+        "thread_id":"user123"
+    }
+}
+agent = asyncio.run(build_agent(config))

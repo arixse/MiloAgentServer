@@ -3,7 +3,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 mcp_config = {
     "mcp-server-chart": {
         "command": "npx",
-        "args": ["-y", "@antv/mcp-server-chart"]
+        "args": ["-y", "@antv/mcp-server-chart"],
+        "transport":"stdio"
     }
 }
 
