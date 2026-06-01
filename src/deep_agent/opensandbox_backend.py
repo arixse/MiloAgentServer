@@ -32,7 +32,7 @@ DEFAULT_SANDBOX_IMAGE = "opensandbox/code-interpreter:v1.0.1"
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-REDIS_KEY_PREFIX = "deep_agent:sandbox"
+REDIS_KEY_PREFIX = "milo_agent:sandbox"
 
 # 全局 Redis 客户端（延迟初始化）
 _redis_client: aioredis.Redis | None = None
@@ -151,10 +151,33 @@ def _get_connection_config() -> ConnectionConfigSync:
     )
 
 
+# 本地项目根目录下的 AGENTS.md 路径
+_LOCAL_AGENTS_MD = os.path.join(os.path.dirname(__file__), "..", "..", "AGENTS.md")
+
+
+def _init_sandbox_filesystem(sandbox: SandboxSync) -> None:
+    """初始化沙盒文件系统：创建必要目录并上传 AGENTS.md。
+
+    仅在全新创建的沙盒上调用，重连的沙盒无需重复初始化。
+    """
+    # 1. 创建 /skills 和 /memories 目录
+    sandbox.commands.run("mkdir -p /skills /memories")
+    print("[Sandbox Init] 已创建目录: /skills, /memories")
+
+    # 2. 上传本地 AGENTS.md 到沙盒根目录
+    if os.path.isfile(_LOCAL_AGENTS_MD):
+        with open(_LOCAL_AGENTS_MD, "rb") as f:
+            content = f.read()
+        sandbox.files.write_file("/AGENTS.md", content)
+        print(f"[Sandbox Init] 已上传 AGENTS.md → /AGENTS.md "
+              f"({len(content)} bytes)")
+    else:
+        print(f"[Sandbox Init] 本地 AGENTS.md 不存在 ({_LOCAL_AGENTS_MD})，跳过上传")
+
+
 def _create_sandbox_instance() -> SandboxSync:
     """创建新的 OpenSandbox 沙盒实例。"""
     config = _get_connection_config()
-    print("------------------restart----------------------")
     sandbox = SandboxSync.create(
         "opensandbox/code-interpreter:v1.0.2",
         connection_config=config,
@@ -234,6 +257,10 @@ async def get_or_create_sandbox(thread_id: str) -> OpenSandboxBackend:
     # 3. 创建新的沙盒实例
     sandbox = _create_sandbox_instance()
     backend = OpenSandboxBackend(sandbox)
+
+    # 初始化沙盒文件系统（目录 + AGENTS.md，仅新创建的沙盒）
+    _init_sandbox_filesystem(sandbox)
+
     _backends[thread_id] = backend
 
     # 4. 将映射关系持久化到 Redis
