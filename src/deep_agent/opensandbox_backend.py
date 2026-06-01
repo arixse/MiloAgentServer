@@ -240,6 +240,79 @@ def _init_sandbox_filesystem(sandbox: SandboxSync) -> None:
         print(f"[Sandbox Init] 本地 AGENTS.md 不存在 ({_LOCAL_AGENTS_MD})，跳过上传")
 
 
+def _install_skill_from_url(sandbox: SandboxSync, skill_name: str, download_url: str) -> None:
+    """从 URL 下载 skill zip 并安装到指定的 sandbox 中。
+
+    供 skill 恢复流程使用，与 install_skill.py 中的下载安装逻辑一致。
+
+    Args:
+        sandbox: 目标 SandboxSync 实例。
+        skill_name: skill 名称。
+        download_url: skill zip 包的下载地址。
+
+    Raises:
+        RuntimeError: 下载或解压失败。
+    """
+    import shutil
+    import tempfile
+
+    import httpx
+
+    filename = download_url.rstrip("/").rsplit("/", 1)[-1] or f"{skill_name}.zip"
+    local_tmpdir = tempfile.mkdtemp(prefix="skill_restore_")
+    try:
+        local_zip = os.path.join(local_tmpdir, filename)
+        with httpx.Client(follow_redirects=True, timeout=120) as http:
+            with http.stream("GET", download_url) as resp:
+                resp.raise_for_status()
+                with open(local_zip, "wb") as f:
+                    for chunk in resp.iter_bytes(64 * 1024):
+                        f.write(chunk)
+
+        with open(local_zip, "rb") as f:
+            sandbox.files.write_file(f"/skills/{filename}", f.read())
+
+        result = sandbox.commands.run(
+            f"mkdir -p /skills/{skill_name}"
+            f" && unzip -o /skills/{filename} -d /skills/{skill_name}"
+            f" && rm -f /skills/{filename}"
+        )
+        if result.exit_code != 0:
+            stderr = result.logs.stderr[0].text if result.logs.stderr else ""
+            raise RuntimeError(f"解压失败 (exit_code={result.exit_code}): {stderr}")
+    finally:
+        shutil.rmtree(local_tmpdir, ignore_errors=True)
+
+
+async def _restore_skills(user_id: str, sandbox: SandboxSync) -> None:
+    """在 sandbox 意外销毁并重建后，从 Redis 记录中恢复该用户之前安装的 skill。
+
+    单个 skill 恢复失败不会阻塞 sandbox 创建，会打印错误日志后继续处理其余 skill。
+
+    Args:
+        user_id: 用户 ID（skill 按 user 维度存储，跨会话保留）。
+        sandbox: 新创建的 SandboxSync 实例。
+    """
+    # lazy import 避免与 sandbox_utils 之间的循环依赖
+    from tools.sandbox_utils import get_installed_skills
+
+    skills = get_installed_skills(user_id)
+    if not skills:
+        return
+
+    print(f"[Skill Restore] 发现用户 {user_id} 的 {len(skills)} 个已安装 skill，开始恢复...")
+    restored = 0
+    for skill_name, download_url in skills.items():
+        try:
+            _install_skill_from_url(sandbox, skill_name, download_url)
+            restored += 1
+            print(f"[Skill Restore] ✓ {skill_name}")
+        except Exception as e:
+            print(f"[Skill Restore] ✗ {skill_name}: {e}")
+
+    print(f"[Skill Restore] 恢复完成: {restored}/{len(skills)}")
+
+
 def _create_sandbox_instance() -> SandboxSync:
     """创建新的 OpenSandbox 沙盒实例（长时间有效）。"""
     config = _get_connection_config()
@@ -262,13 +335,17 @@ def _create_sandbox_instance() -> SandboxSync:
     return sandbox
 
 
-async def get_or_create_sandbox(thread_id: str) -> OpenSandboxBackend:
+async def get_or_create_sandbox(thread_id: str, user_id: str) -> OpenSandboxBackend:
     """获取当前线程缓存的沙盒，如果不存在则创建一个新的。
 
     查找顺序：
     1. 内存缓存（当前会话）
     2. Redis 映射 → 尝试重连已有沙盒
     3. 以上均不可用 → 创建新沙盒并更新 Redis 映射
+
+    Args:
+        thread_id: 对话线程 ID（sandbox 按 thread 隔离）。
+        user_id: 用户 ID（用于 skill 恢复，按 user 维度）。
     """
     # 1. 优先从内存缓存查找
     if backend := _backends.get(thread_id):
@@ -331,6 +408,9 @@ async def get_or_create_sandbox(thread_id: str) -> OpenSandboxBackend:
     # 初始化沙盒文件系统（目录 + AGENTS.md，仅新创建的沙盒）
     _init_sandbox_filesystem(sandbox)
 
+    # 从 Redis 记录中恢复该用户之前安装的 skill（sandbox 意外销毁后的自动恢复）
+    await _restore_skills(user_id, sandbox)
+
     _backends[thread_id] = backend
 
     # 4. 将映射关系持久化到 Redis
@@ -344,10 +424,13 @@ async def get_or_create_sandbox(thread_id: str) -> OpenSandboxBackend:
 
 
 async def cleanup_sandbox(thread_id: str):
-    """在对话结束后清理并销毁指定的沙盒实例"""
+    """在对话结束后清理并销毁指定的沙盒实例。
+
+    注意：skill 记录属于用户而非会话，此处不删除。
+    """
     if backend := _backends.pop(thread_id, None):
         backend.close()
-    # 同时清理 Redis 中的映射记录
+    # 清理 Redis 中的 sandbox 映射记录
     await _delete_sandbox_mapping(thread_id)
     print(f"[Redis] sandbox 映射已清理: thread_id={thread_id}")
 

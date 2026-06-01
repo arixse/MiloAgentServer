@@ -3,26 +3,17 @@ import os
 
 import openpyxl
 import pdfplumber
-from daytona import Daytona, DaytonaConfig
 from docx import Document
 from dotenv import load_dotenv
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pptx import Presentation
 
+from tools.sandbox_utils import get_sandbox_sync
+
 load_dotenv()
 
 sandbox_temp_dir = "/tmp"
-
-
-def _get_sandbox(config: RunnableConfig):
-    """通过 config 中的 thread_id 获取对应的 Daytona sandbox。"""
-    thread_id = config["configurable"]["thread_id"]
-    sandbox_name = f"sandbox_{thread_id}"
-    daytona = Daytona(config=DaytonaConfig(
-        api_key=os.getenv("DAYTONA_API_KEY")
-    ))
-    return daytona.get(sandbox_name)
 
 
 def _find_cjk_font() -> str | None:
@@ -139,10 +130,8 @@ def read_file(file_path: str, config: RunnableConfig) -> str:
         文件内容（纯文本）。
     """
     try:
-        sandbox = _get_sandbox(config)
-        content = sandbox.fs.download_file(file_path)
-        if isinstance(content, str):
-            content = content.encode("utf-8")
+        sandbox = get_sandbox_sync(config)
+        content = sandbox.files.read_bytes(file_path)
 
         _, ext = os.path.splitext(file_path)
         return _parse_file_bytes(content, ext.lower())
@@ -162,11 +151,11 @@ def save_to_markdown(text: str, file_name: str, config: RunnableConfig) -> str:
         保存成功返回文件路径，失败返回错误信息。
     """
     try:
-        sandbox = _get_sandbox(config)
+        sandbox = get_sandbox_sync(config)
         if not file_name.endswith(".md"):
             file_name += ".md"
         remote_path = f"{sandbox_temp_dir}/{file_name}"
-        sandbox.fs.upload_file(text.encode("utf-8"), remote_path)
+        sandbox.files.write_file(remote_path, text.encode("utf-8"))
         return f"文件已保存至 {remote_path}"
     except Exception as e:
         return f"保存 markdown 文件失败: {e}"
@@ -184,27 +173,36 @@ def save_to_pdf(text: str, file_name: str, config: RunnableConfig) -> str:
         保存成功返回文件路径，失败返回错误信息。
     """
     try:
-        sandbox = _get_sandbox(config)
+        sandbox = get_sandbox_sync(config)
         if not file_name.endswith(".pdf"):
             file_name += ".pdf"
         remote_path = f"{sandbox_temp_dir}/{file_name}"
         pdf_bytes = _generate_pdf_bytes(text)
-        sandbox.fs.upload_file(pdf_bytes, remote_path)
+        sandbox.files.write_file(remote_path, pdf_bytes)
         return f"文件已保存至 {remote_path}"
     except Exception as e:
         return f"保存 PDF 文件失败: {e}"
 
+
 HTTP_SERVE_PORT = 8765
 
 
+def _get_stdout(result) -> str:
+    """从 OpenSandbox Execution 结果中提取 stdout 文本。"""
+    if result.logs.stdout:
+        return result.logs.stdout[0].text
+    return ""
+
+
 def _ensure_http_server(sandbox) -> None:
-    check = sandbox.process.exec(
+    """确保 sandbox 中 HTTP 文件服务器已启动。"""
+    check = sandbox.commands.run(
         f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{HTTP_SERVE_PORT}/ 2>/dev/null"
     )
-    if check.exit_code == 0 and check.result.strip() == "200":
+    if check.exit_code == 0 and _get_stdout(check).strip() == "200":
         return None
 
-    sandbox.process.exec(
+    sandbox.commands.run(
         f"pkill -f 'http.server {HTTP_SERVE_PORT}' 2>/dev/null; "
         f"nohup python -m http.server {HTTP_SERVE_PORT} --bind 0.0.0.0 --directory / > /dev/null 2>&1 &"
     )
@@ -216,7 +214,7 @@ def generate_download_url_from_sandbox(file_path: str, config: RunnableConfig) -
     """Generate a public download URL for a file in the sandbox.
 
     Starts an HTTP server in the sandbox if not already running,
-    then creates a preview link pointing to the file.
+    then creates a signed endpoint pointing to the file.
 
     Args:
         file_path: Absolute path to the file in the sandbox, e.g. "/tmp/report.pdf".
@@ -224,12 +222,13 @@ def generate_download_url_from_sandbox(file_path: str, config: RunnableConfig) -
         Public download URL for the file.
     """
     try:
-        sandbox = _get_sandbox(config)
+        sandbox = get_sandbox_sync(config)
         _ensure_http_server(sandbox)
-        preview = sandbox.get_preview_link(HTTP_SERVE_PORT)
-        return f"{preview.url.rstrip('/')}{file_path}"
+        endpoint = sandbox.get_signed_endpoint(HTTP_SERVE_PORT, expires=3600)
+        return f"{endpoint.endpoint.rstrip('/')}{file_path}"
     except Exception as e:
         return f"Failed to generate download URL: {e}"
+
 
 # 获取文件相关的tools
 def get_file_tools():

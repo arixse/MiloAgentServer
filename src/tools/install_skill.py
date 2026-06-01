@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import tempfile
 import zipfile
 from urllib.parse import urljoin
@@ -7,11 +8,12 @@ from urllib.parse import urljoin
 import httpx
 import yaml
 from bs4 import BeautifulSoup
-from daytona import Daytona, DaytonaConfig
 from dotenv import load_dotenv
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from playwright.sync_api import sync_playwright
+
+from tools.sandbox_utils import get_sandbox_sync, record_skill_install
 
 load_dotenv()
 
@@ -28,6 +30,11 @@ def _get_filename_from_url(url: str) -> str:
 
 
 def _parse_skill_name_from_zip(zip_path: str) -> str | None:
+    """从 zip 包中的 SKILL.md frontmatter 解析 skill name。
+
+    使用 yaml.safe_load_all 处理可能含有多个 YAML 文档的情况，
+    避免 frontmatter 内容中包含 ``---`` 时被提前截断。
+    """
     with zipfile.ZipFile(zip_path, "r") as zf:
         skill_md = None
         for name in zf.namelist():
@@ -38,19 +45,16 @@ def _parse_skill_name_from_zip(zip_path: str) -> str | None:
             return None
         content = zf.read(skill_md).decode("utf-8")
 
+    # 提取 YAML frontmatter（``---`` 包裹的头部区块）
     match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
     if not match:
         return None
 
-    frontmatter = yaml.safe_load(match.group(1))
+    frontmatter_text = match.group(1)
+    # 使用 safe_load_all 处理可能存在的多个文档，取第一个
+    docs = list(yaml.safe_load_all(frontmatter_text))
+    frontmatter = docs[0] if docs else None
     return frontmatter.get("name") if isinstance(frontmatter, dict) else None
-
-
-def _get_sandbox(config: RunnableConfig):
-    thread_id = config["configurable"]["thread_id"]
-    sandbox_name = f"sandbox_{thread_id}"
-    daytona = Daytona(config=DaytonaConfig(api_key=os.getenv("DAYTONA_API_KEY")))
-    return daytona.get(sandbox_name)
 
 
 def _download_and_install_skill(download_url: str, config: RunnableConfig) -> str:
@@ -60,6 +64,7 @@ def _download_and_install_skill(download_url: str, config: RunnableConfig) -> st
     local_zip = os.path.join(local_tmpdir, filename)
 
     try:
+        # 1. 下载 zip 到本地临时目录
         with httpx.Client(follow_redirects=True, timeout=120) as http:
             with http.stream("GET", download_url) as resp:
                 resp.raise_for_status()
@@ -67,32 +72,41 @@ def _download_and_install_skill(download_url: str, config: RunnableConfig) -> st
                     for chunk in resp.iter_bytes(64 * 1024):
                         f.write(chunk)
 
-        sandbox = _get_sandbox(config)
-
+        # 2. 从 zip 中解析 skill name
         skill_name = _parse_skill_name_from_zip(local_zip)
         if not skill_name:
             return "无法从 SKILL.md 中解析 skill name"
 
-        remote_zip = f"/skills/{filename}"
-        sandbox.fs.upload_file(local_zip, remote_zip)
+        # 3. 获取已创建的 OpenSandbox sandbox
+        sandbox = get_sandbox_sync(config)
 
-        result = sandbox.process.exec(
+        # 4. 确保 sandbox 中 /skills/ 目录存在，再上传 zip
+        sandbox.commands.run("mkdir -p /skills/")
+        remote_zip = f"/skills/{filename}"
+        with open(local_zip, "rb") as f:
+            sandbox.files.write_file(remote_zip, f.read())
+
+        # 5. 解压并清理临时文件
+        result = sandbox.commands.run(
             f"mkdir -p /skills/{skill_name}"
             f" && unzip -o /skills/{filename} -d /skills/{skill_name}"
             f" && rm -f /skills/{filename}"
         )
         if result.exit_code != 0:
-            return f"解压失败: {result.result}"
+            stderr = result.logs.stderr[0].text if result.logs.stderr else ""
+            return f"解压失败 (exit_code={result.exit_code}): {stderr}"
 
-        import shutil
-        shutil.rmtree(local_tmpdir, ignore_errors=True)
+        # 记录安装到 Redis（按 user 维度），用于 sandbox 意外销毁后的自动恢复
+        user_id = config["configurable"]["user_id"]
+        record_skill_install(user_id, skill_name, download_url)
 
         return f"skill 安装成功，已解压至 sandbox /skills/{skill_name}/ 目录（来源: {download_url}）"
 
     except Exception as e:
-        import shutil
-        shutil.rmtree(local_tmpdir, ignore_errors=True)
         return f"skill 安装失败: {e}"
+
+    finally:
+        shutil.rmtree(local_tmpdir, ignore_errors=True)
 
 
 # =============================================================================
@@ -135,16 +149,20 @@ def _get_clawhub_download_url(page_html: str, base_url: str) -> str | None:
 
 def _get_modelscope_download_url(skill_url: str) -> str | None:
     """Use Playwright to render the ModelScope page (exec JS), then parse <a download> tag."""
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        page = browser.new_page()
-        try:
-            page.goto(skill_url, wait_until="networkidle", timeout=30000)
-            # 额外等待确保动态内容渲染完成
-            page.wait_for_timeout(2000)
-            html = page.content()
-        finally:
-            browser.close()
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page()
+            try:
+                page.goto(skill_url, wait_until="networkidle", timeout=30000)
+                # 额外等待确保动态内容渲染完成
+                page.wait_for_timeout(2000)
+                html = page.content()
+            finally:
+                browser.close()
+    except Exception as e:
+        print(f"[modelscope] Playwright 渲染失败: {e}")
+        return None
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -163,7 +181,11 @@ def _get_modelscope_download_url(skill_url: str) -> str | None:
 
 
 def _get_skillhub_download_url(skill_url: str) -> str | None:
-    """Extract slug from URL and call the SkillHub download API."""
+    """Extract slug from URL and call the SkillHub download API.
+
+    返回 None 表示 API 不可用；返回 API URL 后由 _download_and_install_skill
+    以流式方式下载，避免将整个 zip 读入内存。
+    """
     slug = skill_url.rstrip("/").rsplit("/", 1)[-1]
     api_url = f"https://api.skillhub.cn/api/v1/download?slug={slug}"
 
@@ -254,6 +276,7 @@ def install_skill_from_skillhub_url(skill_url: str, config: RunnableConfig) -> s
 
     print(f"[skillhub] 下载链接: {download_url}")
     return _download_and_install_skill(download_url, config)
+
 
 # 获取 skill相关的工具
 def get_skill_tools():

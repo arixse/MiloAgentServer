@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import datetime, timezone
 
@@ -95,7 +96,7 @@ async def build_agent(config: RunnableConfig):
     user_id = config["configurable"]["user_id"]
 
     # 1. 获取或创建 sandbox（thread_id ↔ sandbox 映射已持久化到 Redis）
-    opensandbox_backend = await get_or_create_sandbox(thread_id)
+    opensandbox_backend = await get_or_create_sandbox(thread_id, user_id)
 
     # 2. CompositeBackend：默认走 sandbox（执行+文件），/memories/ 走 StoreBackend
     def backend_factory(runtime):
@@ -144,13 +145,11 @@ async def build_agent(config: RunnableConfig):
     return _agent
 
 
-# ---------------------------------------------------------------------------
-# 本地测试入口
-# ---------------------------------------------------------------------------
 config = {
-    "configurable": {
-        "thread_id": "user123",
-        "user_id": "user1111",
+    "configurable":{
+        "thread_id":"fb768b1b-5059-4e34-8b00-d270c5fc9f5f",
+        "user_id":"user_123"
     }
 }
+
 agent = asyncio.run(build_agent(config))
