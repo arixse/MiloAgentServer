@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 
 import asyncio
@@ -27,6 +28,14 @@ load_dotenv()
 
 # 默认的沙盒镜像（OpenSandbox 官方提供的代码解释器镜像）
 DEFAULT_SANDBOX_IMAGE = "opensandbox/code-interpreter:v1.0.1"
+
+# ---------------------------------------------------------------------------
+# 沙盒生命周期配置
+# ---------------------------------------------------------------------------
+# 沙盒总存活时间（可通过 SANDBOX_TIMEOUT_HOURS 环境变量覆盖）
+SANDBOX_TIMEOUT_HOURS = float(os.getenv("SANDBOX_TIMEOUT_HOURS", "24"))
+# 续期间隔 = 存活时间的 80%，确保在过期前提前续期
+SANDBOX_RENEW_HOURS = SANDBOX_TIMEOUT_HOURS * 0.8
 
 # Redis 连接配置
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -88,11 +97,66 @@ async def _delete_sandbox_mapping(thread_id: str) -> None:
 class OpenSandboxBackend(BaseSandbox):
     """OpenSandbox 异步沙盒后端。
 
-    实现了 DeepAgents 要求的文件读写与命令执行协议
+    实现了 DeepAgents 要求的文件读写与命令执行协议。
+    通过后台线程定期调用 ``renew()`` 防止沙盒因超时而自动销毁。
     """
 
-    def __init__(self, sandbox: SandboxSync):
+    def __init__(self, sandbox: SandboxSync, timeout_hours: float = SANDBOX_TIMEOUT_HOURS):
         self.sandbox = sandbox
+        self._timeout_hours = timeout_hours
+        self._renew_interval = timeout_hours * 0.8
+        self._stop_renew = threading.Event()
+        self._renew_thread: threading.Thread | None = None
+        self._start_renew_loop()
+
+    # ------------------------------------------------------------------
+    # 后台续期
+    # ------------------------------------------------------------------
+
+    def _start_renew_loop(self) -> None:
+        """启动后台守护线程，定期调用 renew() 续期沙盒。"""
+        interval_seconds = self._renew_interval * 3600
+
+        def _renew_worker() -> None:
+            renew_timeout = timedelta(hours=self._timeout_hours)
+            while not self._stop_renew.is_set():
+                # 等待续期间隔，但可被 stop 事件提前唤醒
+                if self._stop_renew.wait(timeout=interval_seconds):
+                    return
+                try:
+                    self.sandbox.renew(renew_timeout)
+                    print(
+                        f"[Sandbox {self.sandbox.id}] renew 成功 "
+                        f"(timeout={self._timeout_hours}h)"
+                    )
+                except Exception as e:
+                    print(
+                        f"[Sandbox {self.sandbox.id}] renew 失败: {e}"
+                    )
+
+        self._renew_thread = threading.Thread(
+            target=_renew_worker,
+            name=f"sandbox-renew-{self.sandbox.id[:8]}",
+            daemon=True,
+        )
+        self._renew_thread.start()
+        print(
+            f"[Sandbox {self.sandbox.id}] 已启动续期线程 "
+            f"(timeout={self._timeout_hours}h, interval={self._renew_interval}h)"
+        )
+
+    def _stop_renew_loop(self) -> None:
+        """停止后台续期线程。"""
+        if self._renew_thread is None:
+            return
+        self._stop_renew.set()
+        self._renew_thread.join(timeout=5)
+        self._renew_thread = None
+        print(f"[Sandbox {self.sandbox.id}] 续期线程已停止")
+
+    # ------------------------------------------------------------------
+    # Protocol methods
+    # ------------------------------------------------------------------
 
     def id(self) -> str:
         return self.sandbox.id
@@ -138,7 +202,8 @@ class OpenSandboxBackend(BaseSandbox):
         return responses
 
     def close(self) -> None:
-        """Close the sandbox."""
+        """Close the sandbox: stop renew loop, then kill."""
+        self._stop_renew_loop()
         if self.sandbox:
             self.sandbox.kill()
 
@@ -176,11 +241,12 @@ def _init_sandbox_filesystem(sandbox: SandboxSync) -> None:
 
 
 def _create_sandbox_instance() -> SandboxSync:
-    """创建新的 OpenSandbox 沙盒实例。"""
+    """创建新的 OpenSandbox 沙盒实例（长时间有效）。"""
     config = _get_connection_config()
     sandbox = SandboxSync.create(
         "opensandbox/code-interpreter:v1.0.2",
         connection_config=config,
+        timeout=timedelta(hours=SANDBOX_TIMEOUT_HOURS),
         entrypoint=["/opt/opensandbox/code-interpreter.sh"],
         env={
             "PYTHON_VERSION": "3.11",
@@ -188,6 +254,10 @@ def _create_sandbox_instance() -> SandboxSync:
             "NODE_VERSION": "20",
             "GO_VERSION": "1.24",
         },
+    )
+    print(
+        f"[Sandbox] 创建成功: id={sandbox.id}, "
+        f"timeout={SANDBOX_TIMEOUT_HOURS}h"
     )
     return sandbox
 
