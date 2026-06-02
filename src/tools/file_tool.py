@@ -204,7 +204,7 @@ def _ensure_http_server(sandbox) -> None:
 
     sandbox.commands.run(
         f"pkill -f 'http.server {HTTP_SERVE_PORT}' 2>/dev/null; "
-        f"nohup python -m http.server {HTTP_SERVE_PORT} --bind 0.0.0.0 --directory / > /dev/null 2>&1 &"
+        f"nohup python3 -m http.server {HTTP_SERVE_PORT} --bind 0.0.0.0 --directory / > /dev/null 2>&1 &"
     )
     return None
 

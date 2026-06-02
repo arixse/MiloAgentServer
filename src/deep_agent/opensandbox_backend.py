@@ -229,6 +229,18 @@ def _init_sandbox_filesystem(sandbox: SandboxSync) -> None:
     sandbox.commands.run("mkdir -p /skills /memories")
     print("[Sandbox Init] 已创建目录: /skills, /memories")
 
+    # 1.5 确保 pip 可用（镜像可能未预装）
+    pip_check = sandbox.commands.run(
+        "python3 -m pip --version 2>/dev/null || "
+        "python3 -m ensurepip --upgrade 2>/dev/null || "
+        "apt-get update -qq 2>/dev/null && apt-get install -y -qq python3-pip 2>/dev/null; "
+        "python3 -m pip --version 2>/dev/null && echo 'pip ready' || echo 'pip unavailable'"
+    )
+    if "pip ready" in (pip_check.logs.stdout[0].text if pip_check.logs.stdout else ""):
+        print("[Sandbox Init] pip 已就绪")
+    else:
+        print("[Sandbox Init] WARNING: pip 未能安装，Python 包安装功能不可用")
+
     # 2. 上传本地 AGENTS.md 到沙盒根目录
     if os.path.isfile(_LOCAL_AGENTS_MD):
         with open(_LOCAL_AGENTS_MD, "rb") as f:
