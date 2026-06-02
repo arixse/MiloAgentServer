@@ -12,11 +12,12 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
+from auth.dependencies import get_current_user
 from deep_agent.graph import (
     cleanup_thread,
     get_or_create_agent,
@@ -63,7 +64,6 @@ class Message(BaseModel):
 
 
 class CreateThreadRequest(BaseModel):
-    user_id: str = Field(..., description="用户 ID（必填）")
     metadata: dict[str, Any] | None = Field(default=None, description="线程元数据（可选）")
 
 
@@ -97,22 +97,27 @@ class StateResponse(BaseModel):
 # =============================================================================
 
 @router.post("/threads", summary="创建新线程")
-async def create_thread(body: CreateThreadRequest) -> ThreadInfo:
-    """创建一个新的对话线程，绑定到 user_id。
+async def create_thread(
+    body: CreateThreadRequest,
+    current_user: dict = Depends(get_current_user),
+) -> ThreadInfo:
+    """创建一个新的对话线程，绑定到当前认证用户。
 
     线程元数据写入 Redis 持久化。首次调用 runs 时自动初始化 agent + sandbox。
     """
+    user_id = current_user["user_id"]
     thread_id = new_thread_id()
-    await save_thread_meta(thread_id, user_id=body.user_id, metadata=body.metadata)
+    await save_thread_meta(thread_id, user_id=user_id, metadata=body.metadata)
     meta = await _get_owner_meta(thread_id)
     return _meta_to_info(meta)
 
 
 @router.get("/threads", summary="列出用户线程")
 async def list_threads(
-    user_id: str = Query(..., description="用户 ID"),
+    current_user: dict = Depends(get_current_user),
 ) -> list[ThreadInfo]:
-    """返回指定用户的所有线程（从 Redis 读取，重启不丢失）。"""
+    """返回当前认证用户的所有线程（从 Redis 读取，重启不丢失）。"""
+    user_id = current_user["user_id"]
     threads = await list_threads_by_user(user_id)
     return [_meta_to_info(t) for t in threads]
 
@@ -120,9 +125,10 @@ async def list_threads(
 @router.get("/threads/{thread_id}", summary="查询线程信息")
 async def get_thread(
     thread_id: str,
-    user_id: str = Query(..., description="用户 ID"),
+    current_user: dict = Depends(get_current_user),
 ) -> ThreadInfo:
-    """获取指定线程的元数据。需要提供线程所属的 user_id 进行校验。"""
+    """获取指定线程的元数据。需校验线程归属。"""
+    user_id = current_user["user_id"]
     meta = await _require_owner(thread_id, user_id)
     return _meta_to_info(meta)
 
@@ -130,9 +136,10 @@ async def get_thread(
 @router.delete("/threads/{thread_id}", summary="删除线程")
 async def delete_thread(
     thread_id: str,
-    user_id: str = Query(..., description="用户 ID"),
+    current_user: dict = Depends(get_current_user),
 ) -> dict[str, str]:
     """删除线程并销毁其 sandbox。需校验线程归属。"""
+    user_id = current_user["user_id"]
     await _require_owner(thread_id, user_id)
     ok = await cleanup_thread(thread_id)
     if not ok:
@@ -148,9 +155,10 @@ async def delete_thread(
 async def run_agent(
     thread_id: str,
     body: CreateRunRequest,
-    user_id: str = Query(..., description="用户 ID"),
+    current_user: dict = Depends(get_current_user),
 ) -> RunResult:
     """向指定线程发送消息，等待 agent 完整执行后返回结果。"""
+    user_id = current_user["user_id"]
     # 校验线程归属
     await _require_owner(thread_id, user_id)
 
@@ -184,9 +192,10 @@ async def run_agent(
 async def run_agent_stream(
     thread_id: str,
     body: CreateRunRequest,
-    user_id: str = Query(..., description="用户 ID"),
+    current_user: dict = Depends(get_current_user),
 ):
     """向指定线程发送消息，以 SSE 流式返回 agent 的思考/工具调用/最终输出。"""
+    user_id = current_user["user_id"]
     await _require_owner(thread_id, user_id)
 
     lc_messages = [HumanMessage(content=m.content) for m in body.messages if m.role == "user"]
@@ -239,12 +248,13 @@ async def run_agent_stream(
 @router.get("/threads/{thread_id}/state", summary="读取线程状态")
 async def get_state(
     thread_id: str,
-    user_id: str = Query(..., description="用户 ID"),
+    current_user: dict = Depends(get_current_user),
 ) -> StateResponse:
     """获取指定线程的当前状态（消息历史、变量等）。
 
     线程元数据从 Redis 验证归属，状态从 MongoDB checkpoint 读取。
     """
+    user_id = current_user["user_id"]
     await _require_owner(thread_id, user_id)
 
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}

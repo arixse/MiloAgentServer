@@ -212,7 +212,9 @@ async def _build_agent(thread_id: str, user_id: str):
             f"store={MONGO_DB_NAME}_store/persistent_store"
         )
     else:
-        print("[持久化] 由 LangGraph Platform 自动管理")
+        from langgraph.store.memory import InMemoryStore
+        agent_kwargs["store"] = InMemoryStore()
+        print("[持久化] 未启用 MongoDB，使用内存存储（重启后数据丢失）")
 
     agent = create_deep_agent(
         model=DEFAULT_MODEL,

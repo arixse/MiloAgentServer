@@ -8,8 +8,11 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pymongo import MongoClient
 
 from api.chat import router as agent_router
+from auth.router import init_auth_mongo, router as auth_router
 from deep_agent.graph import cleanup_all
 
 
@@ -17,6 +20,14 @@ from deep_agent.graph import cleanup_all
 async def lifespan(app: FastAPI):
     """应用生命周期 —— 启动初始化 & 关闭时清理 sandbox。"""
     print("[Server] MiloAgent 启动中...")
+
+    # 初始化 MongoDB 用户集合（用于认证）
+    try:
+        mongo_client = MongoClient("mongodb://localhost:27017")
+        init_auth_mongo(mongo_client)
+    except Exception as e:
+        print(f"[Server] 警告: 无法连接 MongoDB 用于认证 —— {e}")
+
     yield
     # Shutdown: 清理所有活跃的 sandbox
     count = await cleanup_all()
@@ -32,4 +43,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS —— 允许前端开发服务器跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth_router)
 app.include_router(agent_router)
