@@ -1,10 +1,37 @@
+/** Content block types — represents interleaved text and tool calls in order */
+export interface TextBlock {
+  type: 'text';
+  content: string;
+}
+
+export interface ToolCallBlock {
+  type: 'tool_call';
+  toolCall: ToolCall;
+}
+
+export type ContentBlock = TextBlock | ToolCallBlock;
+
 /** Chat message types */
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
-  content: string;
-  toolCalls?: ToolCall[];
+  blocks: ContentBlock[];
   createdAt: string;
+}
+
+/** Get concatenated text from all text blocks in a message */
+export function getMessageText(msg: ChatMessage): string {
+  return msg.blocks
+    .filter((b): b is TextBlock => b.type === 'text')
+    .map(b => b.content)
+    .join('');
+}
+
+/** Get all tool calls from a message (in order) */
+export function getMessageToolCalls(msg: ChatMessage): ToolCall[] {
+  return msg.blocks
+    .filter((b): b is ToolCallBlock => b.type === 'tool_call')
+    .map(b => b.toolCall);
 }
 
 /** Tool call info (from SSE events or API response) */

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useReducer, useRef, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { ChatMessage } from '../lib/types';
+import type { ChatMessage, ContentBlock, ToolCallBlock } from '../lib/types';
+import { getMessageText } from '../lib/types';
 import * as runsApi from '../api/runs';
 import * as threadsApi from '../api/threads';
 
@@ -22,23 +23,52 @@ const LANGGRAPH_TYPE_MAP: Record<string, ChatMessage['role']> = {
 };
 
 function mapStateMessages(rawMessages: unknown[]): ChatMessage[] {
-  return rawMessages
-    .filter((m: unknown) => {
-      const msg = m as Record<string, unknown>;
-      const msgType = (msg.type as string) || (msg.role as string);
-      return msgType && msg.content;
-    })
-    .map((m: unknown) => {
-      const msg = m as Record<string, unknown>;
-      const msgType = (msg.type as string) || (msg.role as string) || '';
-      const mappedRole = LANGGRAPH_TYPE_MAP[msgType] || 'user';
-      return {
-        id: nextMsgId(),
-        role: mappedRole,
-        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-        createdAt: (msg.created_at as string) || new Date().toISOString(),
-      };
+  const result: ChatMessage[] = [];
+
+  for (const m of rawMessages) {
+    const msg = m as Record<string, unknown>;
+    const msgType = (msg.type as string) || (msg.role as string) || '';
+    const mappedRole = LANGGRAPH_TYPE_MAP[msgType];
+    if (!mappedRole) continue;
+
+    const content = typeof msg.content === 'string' ? msg.content
+      : msg.content ? JSON.stringify(msg.content)
+      : '';
+
+    const blocks: ContentBlock[] = [];
+
+    // Add text block if there's content
+    if (content) {
+      blocks.push({ type: 'text', content });
+    }
+
+    // Add tool call blocks from AI messages (history = already completed)
+    if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
+      for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
+        blocks.push({
+          type: 'tool_call',
+          toolCall: {
+            id: (tc.id as string) || (tc.name as string),
+            name: tc.name as string,
+            args: (tc.args as Record<string, unknown>) || {},
+            status: 'completed',
+          },
+        });
+      }
+    }
+
+    // Skip empty messages
+    if (blocks.length === 0) continue;
+
+    result.push({
+      id: nextMsgId(),
+      role: mappedRole,
+      blocks,
+      createdAt: (msg.created_at as string) || new Date().toISOString(),
     });
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,74 +102,105 @@ function streamReducer(state: StreamState, action: StreamAction): StreamState {
       const assistantMsg: ChatMessage = {
         id: action.payload,
         role: 'assistant',
-        content: '',
+        blocks: [],
         createdAt: new Date().toISOString(),
       };
       return { ...state, isLoading: true, messages: [...state.messages, assistantMsg] };
     }
     case 'APPEND_CONTENT': {
+      // Append text to the last text block, or create a new one
       const msgs = [...state.messages];
       const last = msgs[msgs.length - 1];
       if (last && last.role === 'assistant') {
-        msgs[msgs.length - 1] = { ...last, content: last.content + action.payload };
+        const blocks = [...last.blocks];
+        const lastBlock = blocks[blocks.length - 1];
+        if (lastBlock && lastBlock.type === 'text') {
+          blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + action.payload };
+        } else {
+          blocks.push({ type: 'text', content: action.payload });
+        }
+        msgs[msgs.length - 1] = { ...last, blocks };
       }
       return { ...state, messages: msgs };
     }
     case 'APPEND_TOOL_CHUNK': {
-      // Accumulate streaming arg deltas into a single entry per tool call ID
+      // Accumulate streaming arg deltas into a tool_call block by ID
       const msgs = [...state.messages];
       const last = msgs[msgs.length - 1];
       if (last && last.role === 'assistant') {
-        const existing = last.toolCalls || [];
-        const idx = existing.findIndex(tc => tc.id === action.payload.id);
+        const blocks = [...last.blocks];
+        const idx = blocks.findIndex(b => b.type === 'tool_call' && b.toolCall.id === action.payload.id);
         if (idx >= 0) {
-          const updated = [...existing];
-          const prev = updated[idx];
-          const prevStreaming = (prev.args?._streaming as string) || '';
-          updated[idx] = { ...prev, args: { _streaming: prevStreaming + action.payload.chunkContent } };
-          msgs[msgs.length - 1] = { ...last, toolCalls: updated };
-        } else {
-          msgs[msgs.length - 1] = {
-            ...last,
-            toolCalls: [...existing, { id: action.payload.id, name: action.payload.name, args: { _streaming: action.payload.chunkContent }, status: 'running' as const }],
+          const prev = blocks[idx] as ToolCallBlock;
+          const prevStreaming = (prev.toolCall.args?._streaming as string) || '';
+          blocks[idx] = {
+            type: 'tool_call',
+            toolCall: { ...prev.toolCall, args: { _streaming: prevStreaming + action.payload.chunkContent } },
           };
+        } else {
+          blocks.push({
+            type: 'tool_call',
+            toolCall: {
+              id: action.payload.id,
+              name: action.payload.name,
+              args: { _streaming: action.payload.chunkContent },
+              status: 'running',
+            },
+          });
         }
+        msgs[msgs.length - 1] = { ...last, blocks };
       }
       return { ...state, messages: msgs };
     }
     case 'UPSERT_TOOL_CALL': {
-      // Insert or replace a tool call by ID (for complete tool_calls replacing chunk placeholders)
+      // Replace chunk placeholder with fully-resolved tool call args
       const msgs = [...state.messages];
       const last = msgs[msgs.length - 1];
       if (last && last.role === 'assistant') {
-        const existing = last.toolCalls || [];
-        const idx = existing.findIndex(tc => tc.id === action.payload.id);
+        const blocks = [...last.blocks];
+        const idx = blocks.findIndex(b => b.type === 'tool_call' && b.toolCall.id === action.payload.id);
         if (idx >= 0) {
-          const updated = [...existing];
-          updated[idx] = { ...updated[idx], args: action.payload.args, status: 'running' as const };
-          msgs[msgs.length - 1] = { ...last, toolCalls: updated };
-        } else {
-          msgs[msgs.length - 1] = {
-            ...last,
-            toolCalls: [...existing, { id: action.payload.id, name: action.payload.name, args: action.payload.args, status: 'running' as const }],
+          const prev = blocks[idx] as ToolCallBlock;
+          blocks[idx] = {
+            type: 'tool_call',
+            toolCall: { ...prev.toolCall, args: action.payload.args, status: 'running' },
           };
+        } else {
+          blocks.push({
+            type: 'tool_call',
+            toolCall: {
+              id: action.payload.id,
+              name: action.payload.name,
+              args: action.payload.args,
+              status: 'running',
+            },
+          });
         }
+        msgs[msgs.length - 1] = { ...last, blocks };
       }
       return { ...state, messages: msgs };
     }
     case 'UPDATE_TOOL_CALL': {
+      // Set the result on a tool_call block by ID (or name+status fallback)
       const msgs = [...state.messages];
       const last = msgs[msgs.length - 1];
-      if (last && last.role === 'assistant' && last.toolCalls) {
-        const updated = last.toolCalls.map((tc) => {
-          // Match by tool_call_id first, fall back to name
-          if ((action.payload.toolCallId && tc.id === action.payload.toolCallId) ||
-              (tc.name === action.payload.name && tc.status === 'running')) {
-            return { ...tc, status: 'completed' as const, result: action.payload.result };
+      if (last && last.role === 'assistant') {
+        const blocks = last.blocks.map((b) => {
+          if (b.type === 'tool_call') {
+            const tc = b.toolCall;
+            if (
+              (action.payload.toolCallId && tc.id === action.payload.toolCallId) ||
+              (tc.name === action.payload.name && tc.status === 'running')
+            ) {
+              return {
+                type: 'tool_call' as const,
+                toolCall: { ...tc, status: 'completed' as const, result: action.payload.result },
+              };
+            }
           }
-          return tc;
+          return b;
         });
-        msgs[msgs.length - 1] = { ...last, toolCalls: updated };
+        msgs[msgs.length - 1] = { ...last, blocks };
       }
       return { ...state, messages: msgs };
     }
@@ -148,8 +209,16 @@ function streamReducer(state: StreamState, action: StreamAction): StreamState {
     case 'STREAM_ERROR': {
       const msgs = [...state.messages];
       const last = msgs[msgs.length - 1];
-      if (last && last.role === 'assistant' && !last.content) {
-        msgs[msgs.length - 1] = { ...last, content: `⚠️ 错误: ${action.payload}` };
+      if (last && last.role === 'assistant') {
+        const blocks = [...last.blocks];
+        // Append error as a new text block if there's existing content,
+        // otherwise replace blocks entirely
+        if (getMessageText(last)) {
+          blocks.push({ type: 'text', content: `\n\n⚠️ 错误: ${action.payload}` });
+        } else {
+          blocks.push({ type: 'text', content: `⚠️ 错误: ${action.payload}` });
+        }
+        msgs[msgs.length - 1] = { ...last, blocks };
       }
       return { ...state, isLoading: false };
     }
@@ -190,8 +259,9 @@ export function StreamProvider({ children }: { children: ReactNode }) {
       } else {
         dispatch({ type: 'CLEAR_MESSAGES' });
       }
-    } catch {
-      dispatch({ type: 'CLEAR_MESSAGES' });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '未知错误';
+      toast.error('加载消息失败', { description: msg });
     }
   }, []);
 
@@ -200,7 +270,7 @@ export function StreamProvider({ children }: { children: ReactNode }) {
     const userMsg: ChatMessage = {
       id: nextMsgId(),
       role: 'user',
-      content: text,
+      blocks: [{ type: 'text', content: text }],
       createdAt: new Date().toISOString(),
     };
     dispatch({ type: 'ADD_USER_MESSAGE', payload: userMsg });
@@ -229,14 +299,12 @@ export function StreamProvider({ children }: { children: ReactNode }) {
             }
             if (event.tool_call_chunks) {
               for (const tc of event.tool_call_chunks) {
-                // Accumulate streaming arg deltas into a single entry per tool call ID
                 const dedupId = tc.id || tc.name;
                 dispatch({ type: 'APPEND_TOOL_CHUNK', payload: { id: dedupId, name: tc.name, chunkContent: tc.content } });
               }
             }
             if (event.tool_calls) {
               for (const tc of event.tool_calls) {
-                // Replace chunk placeholder (if any) with the fully-resolved tool call
                 const dedupId = tc.id || tc.name;
                 dispatch({ type: 'UPSERT_TOOL_CALL', payload: { id: dedupId, name: tc.name, args: (tc.args || {}) as Record<string, unknown> } });
               }
@@ -244,7 +312,6 @@ export function StreamProvider({ children }: { children: ReactNode }) {
             break;
           }
           case 'tool_result': {
-            // Match the result to the corresponding pending tool call
             dispatch({
               type: 'UPDATE_TOOL_CALL',
               payload: {

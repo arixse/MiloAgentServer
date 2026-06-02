@@ -2,10 +2,24 @@ import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { useStream } from '../../hooks/useStream';
 import { HumanMessage } from './HumanMessage';
 import { AssistantMessage } from './AssistantMessage';
+import { getMessageText } from '../../lib/types';
+import { Wrench } from 'lucide-react';
 
-export function MessagesList() {
+interface MessagesListProps {
+  showIntermediate: boolean;
+}
+
+export function MessagesList({ showIntermediate }: MessagesListProps) {
   const { messages, isLoading } = useStream();
   const scrollRef = useAutoScroll(messages);
+
+  // Find the index of the last assistant message
+  const lastAssistantIdx = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') return i;
+    }
+    return -1;
+  })();
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6">
@@ -15,22 +29,47 @@ export function MessagesList() {
             发送一条消息开始对话
           </div>
         )}
-        {messages.map((msg) =>
-          msg.role === 'user' ? (
-            <HumanMessage key={msg.id} message={msg} />
-          ) : (
-            <AssistantMessage key={msg.id} message={msg} isStreaming={isLoading} />
-          ),
-        )}
-        {isLoading && messages.length > 0 && messages[messages.length - 1]?.role !== 'assistant' && (
-          <div className="flex items-center gap-2 text-sm text-gray-400">
-            <div className="flex gap-1">
-              <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-          </div>
-        )}
+        {messages.map((msg, i) => {
+          // User messages always visible
+          if (msg.role === 'user') {
+            return <HumanMessage key={msg.id} message={msg} />;
+          }
+
+          // System messages = tool results from history (hidden in 简洁 mode)
+          if (msg.role === 'system') {
+            if (!showIntermediate) return null;
+            const text = getMessageText(msg);
+            if (!text) return null;
+            return (
+              <div key={msg.id} className="flex gap-3 animate-fade-in">
+                <div className="w-7 h-7 rounded-lg bg-gray-100 text-gray-500 flex items-center justify-center shrink-0 mt-0.5">
+                  <Wrench className="w-3.5 h-3.5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-gray-400 mb-1 font-medium">工具结果</div>
+                  <pre className="text-xs text-gray-500 font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto bg-gray-50 rounded-lg p-2.5">
+                    {text}
+                  </pre>
+                </div>
+              </div>
+            );
+          }
+
+          // Assistant messages
+          // In 简洁 mode, hide all but the last assistant (intermediate turns)
+          if (!showIntermediate && i !== lastAssistantIdx) {
+            return null;
+          }
+
+          return (
+            <AssistantMessage
+              key={msg.id}
+              message={msg}
+              isStreaming={isLoading && i === lastAssistantIdx}
+              showIntermediate={showIntermediate}
+            />
+          );
+        })}
       </div>
     </div>
   );

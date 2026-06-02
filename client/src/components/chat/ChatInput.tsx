@@ -49,7 +49,11 @@ export function ChatInput({ onSubmit, onStop, isLoading, disabled }: ChatInputPr
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
             onInput={handleInput}
-            placeholder={disabled ? '请先选择一个会话' : '输入消息... (Enter 发送, Shift+Enter 换行)'}
+            placeholder={
+              disabled ? '请先选择一个会话'
+              : isLoading ? 'AI 正在回复中...'
+              : '输入消息... (Enter 发送, Shift+Enter 换行)'
+            }
             disabled={isLoading || disabled}
             rows={1}
             className={cn(

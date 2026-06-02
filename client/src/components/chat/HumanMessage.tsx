@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../../lib/types';
+import { getMessageText } from '../../lib/types';
 import { cn } from '../../lib/cn';
 
 interface HumanMessageProps {
@@ -14,7 +15,7 @@ export function HumanMessage({ message }: HumanMessageProps) {
           'bg-black text-white rounded-br-md',
         )}
       >
-        <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        <p className="whitespace-pre-wrap break-words">{getMessageText(message)}</p>
       </div>
     </div>
   );
