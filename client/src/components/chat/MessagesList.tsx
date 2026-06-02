@@ -6,20 +6,12 @@ import { getMessageText } from '../../lib/types';
 import { Wrench } from 'lucide-react';
 
 interface MessagesListProps {
-  showIntermediate: boolean;
+  showToolCalls: boolean;
 }
 
-export function MessagesList({ showIntermediate }: MessagesListProps) {
+export function MessagesList({ showToolCalls }: MessagesListProps) {
   const { messages, isLoading } = useStream();
   const scrollRef = useAutoScroll(messages);
-
-  // Find the index of the last assistant message
-  const lastAssistantIdx = (() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant') return i;
-    }
-    return -1;
-  })();
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6">
@@ -29,20 +21,20 @@ export function MessagesList({ showIntermediate }: MessagesListProps) {
             发送一条消息开始对话
           </div>
         )}
-        {messages.map((msg, i) => {
+        {messages.map((msg) => {
           // User messages always visible
           if (msg.role === 'user') {
             return <HumanMessage key={msg.id} message={msg} />;
           }
 
-          // System messages = tool results from history (hidden in 简洁 mode)
+          // System messages = tool results from history (hidden when tool calls off)
           if (msg.role === 'system') {
-            if (!showIntermediate) return null;
+            if (!showToolCalls) return null;
             const text = getMessageText(msg);
             if (!text) return null;
             return (
               <div key={msg.id} className="flex gap-3 animate-fade-in">
-                <div className="w-7 h-7 rounded-lg bg-gray-100 text-gray-500 flex items-center justify-center shrink-0 mt-0.5">
+                <div className="w-7 h-7 rounded-lg bg-gray-100 text-gray-500 flex items-center justify-center shrink-0 mt-0.5 xxxxxx">
                   <Wrench className="w-3.5 h-3.5" />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -55,20 +47,15 @@ export function MessagesList({ showIntermediate }: MessagesListProps) {
             );
           }
 
-          // Assistant messages
-          // In 简洁 mode, hide all but the last assistant (intermediate turns)
-          if (!showIntermediate && i !== lastAssistantIdx) {
-            return null;
-          }
-
+          // Assistant messages — always visible, tool calls toggled inside
           return (
             <AssistantMessage
               key={msg.id}
               message={msg}
-              isStreaming={isLoading && i === lastAssistantIdx}
-              showIntermediate={showIntermediate}
+              isStreaming={isLoading}
+              showToolCalls={showToolCalls}
             />
-          );
+          )
         })}
       </div>
     </div>

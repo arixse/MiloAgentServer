@@ -266,6 +266,9 @@ export function StreamProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const submit = useCallback(async (text: string, threadId: string) => {
+    // Abort any in-flight stream before starting a new one
+    abortRef.current?.abort();
+
     // Add user message
     const userMsg: ChatMessage = {
       id: nextMsgId(),

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useEffect, useReducer, type ReactNode } from 'react';
+import { createContext, useCallback, useEffect, useReducer, useRef, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ThreadInfo } from '../lib/types';
 import * as threadsApi from '../api/threads';
@@ -68,13 +68,15 @@ export const ThreadContext = createContext<ThreadContextValue | null>(null);
 
 export function ThreadProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(threadReducer, initialState);
+  const initialSelectDone = useRef(false);
 
   const fetchThreads = useCallback(async () => {
     dispatch({ type: 'SET_LOADING', payload: true });
     try {
       const threads = await threadsApi.listThreads();
       dispatch({ type: 'SET_THREADS', payload: threads });
-      if (threads.length > 0 && !state.activeThreadId) {
+      if (threads.length > 0 && !initialSelectDone.current) {
+        initialSelectDone.current = true;
         dispatch({ type: 'SELECT_THREAD', payload: threads[0].thread_id });
       }
     } catch (err: unknown) {
@@ -82,7 +84,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
       const msg = err instanceof Error ? err.message : '未知错误';
       toast.error('获取会话列表失败', { description: msg.includes('503') ? '请确认 Redis 服务已启动' : msg });
     }
-  }, [state.activeThreadId]);
+  }, []);
 
   const createThread = useCallback(async () => {
     try {

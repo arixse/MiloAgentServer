@@ -9,7 +9,7 @@ import { Eye, EyeOff } from 'lucide-react';
 export function ChatArea() {
   const { activeThreadId } = useThreads();
   const { isLoading, submit, stop, loadMessages } = useStream();
-  const [showIntermediate, setShowIntermediate] = useState(false);
+  const [showToolCalls, setShowToolCalls] = useState(true);
 
   // Load messages when active thread changes, abort any in-flight stream
   useEffect(() => {
@@ -34,22 +34,22 @@ export function ChatArea() {
       {/* Header with toggle */}
       <div className="flex items-center justify-end px-4 py-1.5 border-b border-gray-100">
         <button
-          onClick={() => setShowIntermediate(!showIntermediate)}
+          onClick={() => setShowToolCalls(!showToolCalls)}
           className={`
             inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs
             transition-colors cursor-pointer
-            ${showIntermediate
+            ${showToolCalls
               ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
               : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
             }
           `}
-          title={showIntermediate ? '隐藏中间过程' : '显示中间过程'}
+          title={showToolCalls ? '隐藏工具调用' : '显示工具调用'}
         >
-          {showIntermediate ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-          <span>{showIntermediate ? '详细' : '简洁'}</span>
+          {showToolCalls ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+          <span>工具调用</span>
         </button>
       </div>
-      <MessagesList showIntermediate={showIntermediate} />
+      <MessagesList showToolCalls={showToolCalls} />
       <ChatInput
         onSubmit={handleSubmit}
         onStop={stop}

@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -9,38 +8,22 @@ import { ToolCallDisplay } from './ToolCallDisplay';
 interface AssistantMessageProps {
   message: ChatMessage;
   isStreaming?: boolean;
-  showIntermediate: boolean;
+  showToolCalls: boolean;
 }
 
-export function AssistantMessage({ message, isStreaming, showIntermediate }: AssistantMessageProps) {
+export function AssistantMessage({ message, isStreaming, showToolCalls }: AssistantMessageProps) {
   const text = getMessageText(message);
 
-  // In "简洁" mode, find the last tool_call block to distinguish intermediate
-  // text (before the last tool call) from final answer (after the last tool call)
-  const lastToolCallIdx = useMemo(() => {
-    for (let i = message.blocks.length - 1; i >= 0; i--) {
-      if (message.blocks[i].type === 'tool_call') return i;
-    }
-    return -1;
-  }, [message.blocks]);
-
-  // Determine which blocks are visible in the current mode
-  const visibleBlockCount = message.blocks.filter((block, i) => {
-    if (block.type === 'tool_call') return showIntermediate;
-    // text block: hidden if it's intermediate (before last tool call in 简洁 mode)
-    if (!showIntermediate && lastToolCallIdx >= 0 && i < lastToolCallIdx) return false;
-    return true;
-  }).length;
-
-  // If nothing is visible and we're not streaming, don't render an empty bubble
-  if (visibleBlockCount === 0 && !isStreaming) {
+  // Skip rendering if nothing visible and not streaming (prevents empty avatar)
+  const hasVisibleToolCalls = showToolCalls && message.blocks.some(b => b.type === 'tool_call');
+  if (!isStreaming && text.length === 0 && !hasVisibleToolCalls) {
     return null;
   }
 
   return (
     <div className="flex gap-3 animate-fade-in">
       {/* AI Avatar */}
-      <div className="w-7 h-7 rounded-lg bg-black text-white flex items-center justify-center shrink-0 mt-0.5">
+      <div className="w-7 h-7 rounded-lg bg-black text-white flex items-center justify-center shrink-0 mt-0.5 yyyyyyy">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </svg>
@@ -50,7 +33,7 @@ export function AssistantMessage({ message, isStreaming, showIntermediate }: Ass
         {/* Render blocks in chronological order */}
         {message.blocks.map((block, i) => {
           if (block.type === 'tool_call') {
-            if (!showIntermediate) return null;
+            if (!showToolCalls) return null;
             return (
               <ToolCallDisplay
                 key={block.toolCall.id || `${block.toolCall.name}-${i}`}
@@ -58,15 +41,9 @@ export function AssistantMessage({ message, isStreaming, showIntermediate }: Ass
               />
             );
           }
-          // text block — hide if intermediate (before last tool call in 简洁 mode)
-          if (!showIntermediate && lastToolCallIdx >= 0 && i < lastToolCallIdx) {
-            return null;
-          }
+          // text block — always visible
           return (
-            <div
-              key={`text-${i}`}
-              className="markdown-content text-sm leading-relaxed text-gray-800"
-            >
+            <div key={`text-${i}`} className="markdown-content text-sm leading-relaxed text-gray-800">
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                 {block.content || (isStreaming && i === message.blocks.length - 1 ? '...' : '')}
               </ReactMarkdown>
@@ -74,8 +51,8 @@ export function AssistantMessage({ message, isStreaming, showIntermediate }: Ass
           );
         })}
 
-        {/* Show pulse when streaming but nothing visible yet (all blocks hidden or no blocks) */}
-        {isStreaming && visibleBlockCount === 0 && (
+        {/* Empty state while waiting for first token */}
+        {message.blocks.length === 0 && isStreaming && (
           <div className="markdown-content text-sm leading-relaxed text-gray-400 animate-pulse">
             ...
           </div>
