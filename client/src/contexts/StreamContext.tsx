@@ -1,6 +1,6 @@
 import { createContext, useCallback, useReducer, useRef, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { ChatMessage, ToolCall } from '../lib/types';
+import type { ChatMessage } from '../lib/types';
 import * as runsApi from '../api/runs';
 import * as threadsApi from '../api/threads';
 
@@ -55,7 +55,9 @@ type StreamAction =
   | { type: 'ADD_USER_MESSAGE'; payload: ChatMessage }
   | { type: 'START_STREAMING'; payload: string }
   | { type: 'APPEND_CONTENT'; payload: string }
-  | { type: 'APPEND_TOOL_CALL'; payload: ToolCall }
+  | { type: 'APPEND_TOOL_CHUNK'; payload: { id: string; name: string; chunkContent: string } }
+  | { type: 'UPSERT_TOOL_CALL'; payload: { id: string; name: string; args: Record<string, unknown> } }
+  | { type: 'UPDATE_TOOL_CALL'; payload: { toolCallId: string; name: string; result: string } }
   | { type: 'FINISH_STREAMING' }
   | { type: 'STREAM_ERROR'; payload: string }
   | { type: 'CLEAR_MESSAGES' };
@@ -83,12 +85,61 @@ function streamReducer(state: StreamState, action: StreamAction): StreamState {
       }
       return { ...state, messages: msgs };
     }
-    case 'APPEND_TOOL_CALL': {
+    case 'APPEND_TOOL_CHUNK': {
+      // Accumulate streaming arg deltas into a single entry per tool call ID
       const msgs = [...state.messages];
       const last = msgs[msgs.length - 1];
       if (last && last.role === 'assistant') {
         const existing = last.toolCalls || [];
-        msgs[msgs.length - 1] = { ...last, toolCalls: [...existing, action.payload] };
+        const idx = existing.findIndex(tc => tc.id === action.payload.id);
+        if (idx >= 0) {
+          const updated = [...existing];
+          const prev = updated[idx];
+          const prevStreaming = (prev.args?._streaming as string) || '';
+          updated[idx] = { ...prev, args: { _streaming: prevStreaming + action.payload.chunkContent } };
+          msgs[msgs.length - 1] = { ...last, toolCalls: updated };
+        } else {
+          msgs[msgs.length - 1] = {
+            ...last,
+            toolCalls: [...existing, { id: action.payload.id, name: action.payload.name, args: { _streaming: action.payload.chunkContent }, status: 'running' as const }],
+          };
+        }
+      }
+      return { ...state, messages: msgs };
+    }
+    case 'UPSERT_TOOL_CALL': {
+      // Insert or replace a tool call by ID (for complete tool_calls replacing chunk placeholders)
+      const msgs = [...state.messages];
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === 'assistant') {
+        const existing = last.toolCalls || [];
+        const idx = existing.findIndex(tc => tc.id === action.payload.id);
+        if (idx >= 0) {
+          const updated = [...existing];
+          updated[idx] = { ...updated[idx], args: action.payload.args, status: 'running' as const };
+          msgs[msgs.length - 1] = { ...last, toolCalls: updated };
+        } else {
+          msgs[msgs.length - 1] = {
+            ...last,
+            toolCalls: [...existing, { id: action.payload.id, name: action.payload.name, args: action.payload.args, status: 'running' as const }],
+          };
+        }
+      }
+      return { ...state, messages: msgs };
+    }
+    case 'UPDATE_TOOL_CALL': {
+      const msgs = [...state.messages];
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === 'assistant' && last.toolCalls) {
+        const updated = last.toolCalls.map((tc) => {
+          // Match by tool_call_id first, fall back to name
+          if ((action.payload.toolCallId && tc.id === action.payload.toolCallId) ||
+              (tc.name === action.payload.name && tc.status === 'running')) {
+            return { ...tc, status: 'completed' as const, result: action.payload.result };
+          }
+          return tc;
+        });
+        msgs[msgs.length - 1] = { ...last, toolCalls: updated };
       }
       return { ...state, messages: msgs };
     }
@@ -176,11 +227,32 @@ export function StreamProvider({ children }: { children: ReactNode }) {
             if (event.content) {
               dispatch({ type: 'APPEND_CONTENT', payload: event.content });
             }
-            if (event.tool_calls) {
-              for (const tc of event.tool_calls) {
-                dispatch({ type: 'APPEND_TOOL_CALL', payload: tc });
+            if (event.tool_call_chunks) {
+              for (const tc of event.tool_call_chunks) {
+                // Accumulate streaming arg deltas into a single entry per tool call ID
+                const dedupId = tc.id || tc.name;
+                dispatch({ type: 'APPEND_TOOL_CHUNK', payload: { id: dedupId, name: tc.name, chunkContent: tc.content } });
               }
             }
+            if (event.tool_calls) {
+              for (const tc of event.tool_calls) {
+                // Replace chunk placeholder (if any) with the fully-resolved tool call
+                const dedupId = tc.id || tc.name;
+                dispatch({ type: 'UPSERT_TOOL_CALL', payload: { id: dedupId, name: tc.name, args: (tc.args || {}) as Record<string, unknown> } });
+              }
+            }
+            break;
+          }
+          case 'tool_result': {
+            // Match the result to the corresponding pending tool call
+            dispatch({
+              type: 'UPDATE_TOOL_CALL',
+              payload: {
+                toolCallId: event.tool_call_id,
+                name: event.name,
+                result: typeof event.content === 'string' ? event.content : JSON.stringify(event.content),
+              },
+            });
             break;
           }
           case 'done':

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
@@ -118,7 +118,10 @@ async def list_threads(
 ) -> list[ThreadInfo]:
     """返回当前认证用户的所有线程（从 Redis 读取，重启不丢失）。"""
     user_id = current_user["user_id"]
-    threads = await list_threads_by_user(user_id)
+    try:
+        threads = await list_threads_by_user(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"无法连接 Redis，请确认 Redis 服务已启动: {e}")
     return [_meta_to_info(t) for t in threads]
 
 
@@ -214,6 +217,19 @@ async def run_agent_stream(
                 stream_mode="messages",
             ):
                 msg_chunk = chunk[0]
+
+                # --- Tool result (ToolMessage) ---
+                if isinstance(msg_chunk, ToolMessage):
+                    event = {
+                        "type": "tool_result",
+                        "tool_call_id": getattr(msg_chunk, "tool_call_id", ""),
+                        "name": getattr(msg_chunk, "name", ""),
+                        "content": msg_chunk.content,
+                    }
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    continue
+
+                # --- AI text / tool call request ---
                 event: dict[str, Any] = {"type": "message"}
 
                 if isinstance(msg_chunk, AIMessageChunk) and msg_chunk.content:
@@ -221,13 +237,13 @@ async def run_agent_stream(
 
                 if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
                     event["tool_calls"] = [
-                        {"name": tc.get("name"), "args": tc.get("args")}
+                        {"name": tc.get("name"), "args": tc.get("args"), "id": tc.get("id", "")}
                         for tc in msg_chunk.tool_calls
                     ]
 
                 if hasattr(msg_chunk, "tool_call_chunks") and msg_chunk.tool_call_chunks:
                     event["tool_call_chunks"] = [
-                        {"name": c.get("name", ""), "content": c.get("args", "")}
+                        {"id": c.get("id", ""), "name": c.get("name", ""), "content": c.get("args", "")}
                         for c in msg_chunk.tool_call_chunks
                     ]
 

@@ -24,7 +24,7 @@ export function AssistantMessage({ message, isStreaming }: AssistantMessageProps
         {message.toolCalls && message.toolCalls.length > 0 && (
           <div className="mb-2 space-y-1">
             {message.toolCalls.map((tc, i) => (
-              <ToolCallDisplay key={`${tc.name}-${i}`} toolCall={tc} />
+              <ToolCallDisplay key={tc.id || `${tc.name}-${i}`} toolCall={tc} />
             ))}
           </div>
         )}
