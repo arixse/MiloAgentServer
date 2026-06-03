@@ -12,8 +12,9 @@ FROM node:22-alpine AS frontend-builder
 
 WORKDIR /app/client
 
-# 仅复制依赖文件以利用 Docker 层缓存
-COPY client/package.json client/package-lock.json ./
+# 复制 package.json 并安装依赖
+# 注意：删除 lock 文件强制重解析，避免 Windows→Linux 平台原生绑定缺失
+COPY client/package.json ./
 RUN npm install
 
 # 复制前端源码并构建
