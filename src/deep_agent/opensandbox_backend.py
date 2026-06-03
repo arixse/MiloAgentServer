@@ -210,7 +210,7 @@ class OpenSandboxBackend(BaseSandbox):
 def _get_connection_config() -> ConnectionConfigSync:
     """获取 OpenSandbox 连接配置。"""
     return ConnectionConfigSync(
-        domain="http://182.254.183.29:8080",
+        domain=os.getenv("OPENSANDBOX_SERVER_URL", "http://182.254.183.29:8080"),
         use_server_proxy=True,
         api_key=os.getenv("OPENSANDBOX_API_KEY"),
     )

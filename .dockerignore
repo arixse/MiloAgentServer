@@ -20,6 +20,9 @@ __pycache__/
 .git/
 .gitignore
 
+# Frontend — built separately, not needed in backend image
+client/
+
 # Claude
 .claude/
 
