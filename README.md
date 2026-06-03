@@ -1,250 +1,251 @@
 # MiloAgent
 
-基于 LangGraph 的 Deep Agent 服务，搭配 React 前端聊天界面。支持流式输出、工具调用可视化、代码沙盒执行和 Skill 动态安装。
+A self-hosted Deep Agent server powered by [LangGraph](https://github.com/langchain-ai/langgraph) and [DeepAgents](https://github.com/langchain-ai/deepagents), with a React chat interface, streaming responses, sandboxed code execution, and dynamic skill installation.
 
-## 架构
+[![CI](https://github.com/arixse/MiloAgentServer/actions/workflows/build-image.yml/badge.svg)](https://github.com/arixse/MiloAgentServer/actions/workflows/build-image.yml)
 
-```
-┌─────────────────────┐     SSE 流式      ┌──────────────────────────┐
-│   React 前端 (Vite)  │ ◄──────────────► │   FastAPI 后端 (Python)   │
-│   port 5173          │   REST + JWT     │   port 8000              │
-└─────────────────────┘                   └──────────┬───────────────┘
-                                                     │
-                              ┌──────────────────────┼──────────────────────┐
-                              │                      │                      │
-                         ┌────▼────┐          ┌──────▼──────┐        ┌─────▼─────┐
-                         │  Redis   │          │   MongoDB    │        │ OpenSandbox│
-                         │ 元数据   │          │ checkpoint   │        │ 代码执行   │
-                         │ sandbox  │          │ store/记忆   │        │ 沙盒      │
-                         └─────────┘          └─────────────┘        └───────────┘
-```
+## Features
 
-### 三层存储
+- **Deep Agent** — multi-step reasoning with tool use, subagents, file I/O, and persistent memory
+- **Streaming chat** — real-time SSE streaming with Markdown rendering and syntax highlighting
+- **Sandbox execution** — isolated code execution via OpenSandbox, with automatic pip setup
+- **Tool call visualization** — expandable tool call cards show args and results inline, in chronological order
+- **Skill system** — dynamic skill installation from URLs, auto-restored on sandbox rebuild
+- **JWT authentication** — user registration/login with thread-level isolation
+- **Persistent storage** — Redis for thread metadata, MongoDB for conversation history and long-term memory
+- **Docker-first** — multi-stage build bundles frontend and backend into a single image
 
-| 存储层 | 技术 | 内容 | 持久化 |
-|--------|------|------|--------|
-| 线程元数据 | Redis | thread_id、user_id、sandbox 映射、skill 记录 | ✅ |
-| 对话/记忆 | MongoDB | LangGraph checkpoint（消息历史）、Store（长期记忆） | ✅ |
-| 进程内存 | Python dict | agent 实例热缓存、sandbox 后端引用 | ❌ 重启丢失 |
-
-## 技术栈
-
-| 层 | 技术 |
-|----|------|
-| **后端框架** | FastAPI + Uvicorn |
-| **Agent 框架** | LangGraph + DeepAgents |
-| **LLM** | DeepSeek (可替换为任意 OpenAI-compatible 模型) |
-| **沙盒** | [OpenSandbox](http://182.254.183.29:8080) |
-| **持久化** | Redis + MongoDB |
-| **认证** | JWT (access token) |
-| **前端** | React 19 + TypeScript + Tailwind CSS 4 + Vite |
-| **Markdown 渲染** | react-markdown + remark-gfm + rehype-highlight |
-| **部署** | Docker Compose |
-
-## 项目结构
+## Architecture
 
 ```
-├── src/
-│   ├── main.py                          # FastAPI 入口 + 生命周期管理
-│   ├── model_provider.py                # LLM 模型配置
-│   ├── api/
-│   │   └── chat.py                      # /threads, /runs, /state API
-│   ├── auth/
-│   │   ├── router.py                    # /auth 注册/登录
-│   │   ├── security.py                  # JWT 生成与验证
-│   │   ├── models.py                    # 用户模型
-│   │   └── dependencies.py              # get_current_user 依赖
-│   ├── deep_agent/
-│   │   ├── graph.py                     # Agent 工厂、线程管理、MongoDB 持久化
-│   │   ├── opensandbox_backend.py       # OpenSandbox 沙盒后端（创建/重连/清理）
-│   │   ├── sandbox.py                   # LangSmith sandbox 后端（备选）
-│   │   ├── sub_agents.py                # 子 agent 定义
-│   │   └── test.py                      # OpenSandbox 测试脚本
-│   ├── tools/
-│   │   ├── file_tool.py                 # 文件读写、PDF/Markdown 保存、下载 URL
-│   │   ├── install_skill.py             # Skill 动态下载安装
-│   │   ├── search_tool.py               # 搜索工具
-│   │   ├── mcp_tool.py                  # MCP 工具集成
-│   │   └── sandbox_utils.py             # 沙盒获取、skill 记录管理
-│   └── utils/
-│       └── path.py                      # 项目根路径工具
-├── client/                              # React 前端
-│   └── src/
-│       ├── components/chat/             # 聊天组件
-│       │   ├── ChatArea.tsx             # 主区域（含工具调用开关）
-│       │   ├── MessagesList.tsx         # 消息列表（按顺序渲染 blocks）
-│       │   ├── AssistantMessage.tsx     # AI 消息（Markdown + 工具调用）
-│       │   ├── HumanMessage.tsx         # 用户消息
-│       │   ├── ToolCallDisplay.tsx      # 工具调用卡片（参数/结果展开）
-│       │   ├── ChatInput.tsx            # 输入框（Enter 发送、停止按钮）
-│       │   └── EmptyState.tsx           # 空状态
-│       ├── contexts/
-│       │   ├── StreamContext.tsx         # 流式消息状态管理（Block 模型）
-│       │   └── ThreadContext.tsx         # 线程列表管理
-│       ├── hooks/                       # useStream, useAutoScroll, useThreads
-│       ├── api/                         # API 调用（fetch SSE stream）
-│       └── lib/                         # 类型定义、工具函数
-├── AGENTS.md                            # Agent 系统提示词
-├── Dockerfile                           # 后端镜像构建
-├── docker-compose.yml                   # 完整环境 (app + Redis + MongoDB)
-└── .github/workflows/build-image.yml    # CI 自动构建镜像
+┌──────────────────────┐     SSE + REST       ┌──────────────────────────┐
+│  React frontend (Vite) │ ◄─────────────────► │   FastAPI server          │
+│  Port 5173 (dev only)  │                     │   Port 8000              │
+└──────────────────────┘                       └────────┬─────────────────┘
+                                                        │
+                              ┌─────────────────────────┼─────────────────────┐
+                              │                         │                     │
+                         ┌────▼────┐             ┌──────▼──────┐       ┌─────▼──────┐
+                         │  Redis   │             │   MongoDB    │       │ OpenSandbox │
+                         │ metadata │             │ checkpoints  │       │ code exec   │
+                         │ sandbox  │             │ store/memory │       │ sandbox     │
+                         └─────────┘             └─────────────┘       └────────────┘
 ```
 
-## 前置条件
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| Frontend | React 19 + TypeScript + Tailwind CSS 4 | Chat UI with Markdown, tool call cards, streaming |
+| API | FastAPI + Uvicorn | REST endpoints, SSE streaming, JWT auth |
+| Agent | LangGraph + DeepAgents | Multi-step reasoning, tool orchestration, subagents |
+| LLM | DeepSeek (OpenAI-compatible) | Model provider (configurable) |
+| Checkpoint | MongoDB | Conversation history, agent state persistence |
+| Memory | MongoDB Store | Long-term user preferences at `/memories/` |
+| Metadata | Redis | Thread list, sandbox mappings, skill records |
+| Sandbox | OpenSandbox | Isolated shell commands, file I/O, code execution |
 
-- **Python 3.11+** + [Poetry](https://python-poetry.org/) 或 pip
-- **Redis** — 线程元数据、sandbox 映射、skill 记录
-- **MongoDB** — LangGraph checkpoint + store 持久化
-- **OpenSandbox** — 代码执行沙盒服务（地址配置在 `.env` 中）
-- **Node.js 20+** — 前端开发
+## Quick start
 
-### 本地数据库
+### Prerequisites
 
-```
-MySQL:      root:123456@localhost:3306
-Redis:      localhost:6379
-MongoDB:    localhost:27017
-PostgreSQL: root:123456@localhost:5432
-```
+- Python 3.11+ with [uv](https://docs.astral.sh/uv/) or pip
+- Redis (any version)
+- MongoDB 7+
+- [OpenSandbox](http://182.254.183.29:8080) server
+- Node.js 22+ (frontend development only)
 
-## 快速开始
-
-### 1. 环境变量
-
-复制并编辑 `.env`：
+### 1. Configure environment
 
 ```bash
 cp .env.example .env
+# Edit .env with your API keys and connection strings
 ```
 
-关键配置项：
+Key variables:
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `OPENSANDBOX_API_KEY` | OpenSandbox API 密钥 | — |
-| `REDIS_HOST` | Redis 地址 | localhost |
-| `MONGO_URI` | MongoDB 连接串 | mongodb://localhost:27017 |
-| `USE_MONGO_PERSISTENCE` | 启用 MongoDB 持久化 | false |
-| `JWT_SECRET_KEY` | JWT 签名密钥 | (自动生成) |
-| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | — |
-| `SANDBOX_TIMEOUT_HOURS` | 沙盒存活时间 | 24 |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DEEPSEEK_API_KEY` | DeepSeek API key | — |
+| `DEEPSEEK_MODEL_NAME` | Model name | `deepseek-v4-flash` |
+| `OPENSANDBOX_SERVER_URL` | OpenSandbox endpoint | `http://182.254.183.29:8080` |
+| `OPENSANDBOX_API_KEY` | OpenSandbox API key | — |
+| `REDIS_HOST` | Redis host | `localhost` |
+| `MONGO_URI` | MongoDB connection string | `mongodb://localhost:27017` |
+| `USE_MONGO_PERSISTENCE` | Enable MongoDB persistence | `false` |
+| `JWT_SECRET_KEY` | JWT signing key | auto-generated dev key |
 
-### 2. Docker Compose（推荐）
+### 2. Start with Docker Compose
 
 ```bash
 docker compose up -d
 ```
 
-启动后：
-- 后端 API：http://localhost:8000
-- API 文档：http://localhost:8000/docs
+This starts the full stack — app, Redis, and MongoDB — on port **8000**. Open [http://localhost:8000](http://localhost:8000) to use the app.
 
-### 3. 本地开发
+### 3. Local development
 
-**后端**：
+**Backend:**
 
 ```bash
-# 安装依赖
-pip install -r requirements.txt
-
-# 启动
-uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+uv sync
+uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-**前端**：
+**Frontend** (in a separate terminal):
 
 ```bash
 cd client
 npm install
-npm run dev        # http://localhost:5173
+npm run dev       # → http://localhost:5173
 ```
 
-## API 端点
+The Vite dev server proxies `/api` requests to `localhost:8000`, so you get hot module replacement for the frontend while the backend handles API calls.
 
-### 认证
+## API reference
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/auth/register` | 用户注册 |
-| POST | `/api/auth/login` | 用户登录（返回 JWT） |
-| GET | `/api/auth/me` | 获取当前用户信息 |
+All endpoints are prefixed with `/api`. Protected endpoints require `Authorization: Bearer <token>`.
 
-### 线程
+### Authentication
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/threads` | 创建新线程 |
-| GET | `/api/threads` | 列出当前用户的线程 |
-| GET | `/api/threads/{id}` | 查询线程信息 |
-| DELETE | `/api/threads/{id}` | 删除线程（同时销毁沙盒） |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/auth/register` | No | Register a new user |
+| `POST` | `/auth/login` | No | Login, returns JWT |
+| `GET` | `/auth/me` | Yes | Get current user info |
 
-### 运行
+### Threads
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/threads/{id}/runs` | 非流式运行 agent |
-| POST | `/api/threads/{id}/runs/stream` | **SSE 流式运行**（前端使用） |
-| GET | `/api/threads/{id}/state` | 读取线程状态/消息历史 |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/threads` | Yes | Create a new thread |
+| `GET` | `/threads` | Yes | List user's threads |
+| `GET` | `/threads/{id}` | Yes | Get thread metadata |
+| `DELETE` | `/threads/{id}` | Yes | Delete thread and its sandbox |
 
-### SSE 事件类型
+### Runs
 
-流式端点返回以下事件：
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/threads/{id}/runs` | Yes | Non-streaming run |
+| `POST` | `/threads/{id}/runs/stream` | Yes | **SSE streaming run** |
+| `GET` | `/threads/{id}/state` | Yes | Read thread state / messages |
 
-| type | 说明 |
-|------|------|
-| `message` | AI 文本增量 + 工具调用/工具调用增量 |
-| `tool_result` | 工具执行结果 |
-| `done` | 流结束 |
-| `error` | 错误信息 |
+### SSE stream events
 
-## 前端功能
+The streaming endpoint emits the following events:
 
-- **JWT 认证**：注册/登录，token 自动附带
-- **线程管理**：创建、切换、删除对话线程
-- **流式输出**：SSE 实时渲染 AI 回复（Markdown + 代码高亮）
-- **工具调用可视化**：可展开查看参数和结果，支持三种状态（运行中/完成/错误）
-- **按序穿插**：工具调用和 AI 文本按实际发生顺序交错显示
-- **简洁模式**：一键开关工具调用显示，中间思考过程始终可见
-- **自动滚动**：用户手动上滚时不强制跳底
-- **停止生成**：随时中断 AI 回复
+| `type` | Payload | Description |
+|--------|---------|-------------|
+| `message` | `content`, `tool_calls`, `tool_call_chunks` | AI text delta and/or tool call information |
+| `tool_result` | `tool_call_id`, `name`, `content` | Tool execution result |
+| `done` | `thread_id` | Stream completed successfully |
+| `error` | `detail` | Error message |
 
-## 工具系统
+## Built-in tools
 
-Agent 可用的内置工具：
+The agent comes with a set of built-in tools accessible from the sandbox:
 
-| 工具 | 说明 |
-|------|------|
-| `search` | 网络搜索 |
-| `read_file` | 读取沙盒文件（支持 PDF/Markdown/DOCX/XLSX/PPTX/TXT） |
-| `save_to_markdown` | 保存文本为 Markdown 文件 |
-| `save_to_pdf` | 保存文本为 PDF 文件 |
-| `generate_download_url` | 生成沙盒文件的公开下载链接 |
-| `install_skill` | 从 URL 下载安装 Skill |
-| MCP 工具 | 通过 MCP 协议集成的外部工具 |
+| Tool | Description |
+|------|-------------|
+| `search` | Web search via Tavily |
+| `read_file` | Read files from sandbox (supports PDF, Markdown, DOCX, XLSX, PPTX, TXT) |
+| `save_to_markdown` | Save text as a Markdown file in the sandbox |
+| `save_to_pdf` | Save text as a PDF in the sandbox |
+| `generate_download_url` | Generate a signed download URL for a sandbox file |
+| `install_skill` | Download and install a skill from a URL |
+| `utc_now` | Get current UTC timestamp |
 
-### Skill 系统
+Additional tools can be integrated via MCP (Model Context Protocol).
 
-- Skill 通过 `install_skill` 工具从 URL 下载 zip 包并解压到 `/skills/` 目录
-- 安装记录按用户维度存储在 Redis 中
-- 沙盒意外销毁重建后自动恢复该用户的所有已安装 Skill
-
-## 沙盒
-
-- 每个线程独占一个 OpenSandbox 沙盒实例
-- 默认使用 `opensandbox/code-interpreter:v1.0.2` 镜像
-- 沙盒初始化时自动确保 pip 可用（三层回退：内置 pip → ensurepip → apt-get）
-- 支持通过 Redis 映射重连已有沙盒（服务重启后恢复）
-- 后台线程自动续期，默认 24 小时超时
-- 线程删除/服务关闭时自动清理沙盒
-
-## 认证流程
+## Project structure
 
 ```
-用户注册/登录 → JWT access_token → 存入 localStorage
-    ↓
-所有 API 请求携带 Authorization: Bearer <token>
-    ↓
-后端 get_current_user 依赖校验 → 绑定 user_id
-    ↓
-线程/沙盒按 user_id 隔离，禁止跨用户访问
+├── src/
+│   ├── main.py                              # FastAPI app entry point
+│   ├── model_provider.py                    # LLM configuration
+│   ├── api/
+│   │   └── chat.py                          # Thread, run, and state endpoints
+│   ├── auth/
+│   │   ├── router.py                        # Registration and login endpoints
+│   │   ├── security.py                      # JWT encode / decode
+│   │   ├── models.py                        # User data models
+│   │   └── dependencies.py                  # get_current_user dependency
+│   ├── deep_agent/
+│   │   ├── graph.py                         # Agent factory, caching, persistence
+│   │   ├── opensandbox_backend.py           # OpenSandbox backend (create, reconnect, cleanup)
+│   │   └── sub_agents.py                    # Subagent definitions
+│   ├── tools/
+│   │   ├── file_tool.py                     # File read/write/convert tools
+│   │   ├── install_skill.py                 # Dynamic skill installation
+│   │   ├── search_tool.py                   # Web search tool
+│   │   ├── mcp_tool.py                      # MCP integration
+│   │   └── sandbox_utils.py                # Sandbox helpers and skill records
+│   └── utils/
+│       └── path.py                          # Project root path helper
+├── client/                                  # React frontend (built separately)
+│   └── src/
+│       ├── components/chat/                 # Chat UI components
+│       ├── contexts/                        # StreamContext, ThreadContext
+│       ├── hooks/                           # useStream, useAutoScroll, useThreads
+│       ├── api/                             # API client + SSE stream parser
+│       └── lib/                             # TypeScript types and helpers
+├── AGENTS.md                                # Agent system prompt and conventions
+├── Dockerfile                               # Multi-stage build (frontend + backend)
+├── docker-compose.yml                       # Full stack (app + Redis + MongoDB)
+└── .github/workflows/build-image.yml        # CI: build on GitHub Release
+```
+
+## Deployment
+
+### Docker image
+
+The Dockerfile uses a **multi-stage build**:
+
+1. **Stage 1** (`node:22-alpine`) — builds the React frontend into `client/dist/`
+2. **Stage 2** (`python:3.11-slim`) — installs Python dependencies, copies the frontend build, and serves everything with Uvicorn
+
+```bash
+docker build -t milo-agent:latest .
+docker run -p 8000:8000 --env-file .env milo-agent:latest
+```
+
+### GitHub Actions
+
+Creating a [GitHub Release](https://github.com/arixse/MiloAgentServer/releases) triggers an automatic build that pushes the image to GHCR:
+
+```bash
+docker pull ghcr.io/arixse/milo-agent-server:latest
+docker pull ghcr.io/arixse/milo-agent-server:1.0.0  # specific version
+```
+
+## Sandbox lifecycle
+
+- Each thread gets its own isolated OpenSandbox instance (`opensandbox/code-interpreter:v1.0.2`)
+- Sandboxes are automatically renewed in the background (default 24h timeout)
+- On server restart, sandboxes are reconnected via Redis mappings
+- Thread deletion or server shutdown cleans up the associated sandbox
+- **pip** is automatically installed during sandbox initialization via a three-tier fallback (built-in pip → `ensurepip` → `apt-get`)
+
+## Skill system
+
+Skills are zip archives installed into the sandbox's `/skills/` directory:
+
+1. Agent calls `install_skill` with a skill name and download URL
+2. The zip is downloaded, uploaded to the sandbox, and extracted
+3. Installation records are persisted in Redis per user
+4. If a sandbox is destroyed and recreated, all skills are automatically restored
+
+> [!NOTE]
+> Skill state does not persist across sandbox rebuilds — only the installation records are kept. Skills that modify system state (e.g., `apt-get install`) will need to be re-run.
+
+## Authentication flow
+
+```
+POST /auth/register  →  create user in MongoDB
+POST /auth/login     →  verify credentials, return JWT access token
+         ↓
+  All subsequent requests include Authorization: Bearer <token>
+         ↓
+  get_current_user extracts user_id from JWT
+         ↓
+  Threads and sandboxes are scoped to the authenticated user
 ```
