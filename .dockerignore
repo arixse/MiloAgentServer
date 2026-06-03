@@ -20,8 +20,9 @@ __pycache__/
 .git/
 .gitignore
 
-# Frontend — built separately, not needed in backend image
-client/
+# Frontend — built in Stage 1 of multi-stage Dockerfile, dist/ copied to Stage 2
+# Only exclude node_modules to keep build context small; source is needed for build
+client/node_modules/
 
 # Claude
 .claude/

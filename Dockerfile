@@ -1,9 +1,28 @@
-# ---------------------------------------------------------------------------
-# MiloAgent Dockerfile
-# ---------------------------------------------------------------------------
-# Python 3.11 + Node.js (for MCP npx tools) + Playwright
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# MiloAgent — 多阶段 Docker 构建
+# ===========================================================================
+# Stage 1: 编译前端 (Node.js)
+# Stage 2: 后端镜像 (Python)，嵌入前端构建产物
+# ===========================================================================
 
+# ---------------------------------------------------------------------------
+# Stage 1 — 前端构建
+# ---------------------------------------------------------------------------
+FROM node:22-alpine AS frontend-builder
+
+WORKDIR /app/client
+
+# 仅复制依赖文件以利用 Docker 层缓存
+COPY client/package.json client/package-lock.json* ./
+RUN npm ci
+
+# 复制前端源码并构建
+COPY client/ ./
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# Stage 2 — 后端生产镜像
+# ---------------------------------------------------------------------------
 FROM python:3.11-slim
 
 LABEL org.opencontainers.image.title="MiloAgent"
@@ -12,7 +31,7 @@ LABEL org.opencontainers.image.description="Deep Agent based on LangGraph / Deep
 # ---------------------------------------------------------------------------
 # System dependencies
 # ---------------------------------------------------------------------------
-# - curl, git: uv / general tooling
+# - curl, git: general tooling / uv
 # - build-essential: some Python packages may need compilation
 # - Node.js (22.x): required for MCP tools that rely on `npx`
 # - Playwright system deps: for headless browser automation
@@ -47,8 +66,13 @@ COPY pyproject.toml uv.lock ./
 # Install Python dependencies (production only, no dev group)
 RUN uv sync --frozen --no-dev
 
-# Copy the rest of the project
+# Copy the rest of the backend project
 COPY . .
+
+# ---------------------------------------------------------------------------
+# Copy frontend build from Stage 1
+# ---------------------------------------------------------------------------
+COPY --from=frontend-builder /app/client/dist ./client/dist
 
 # ---------------------------------------------------------------------------
 # Playwright browsers (for browser automation tools)
@@ -60,5 +84,5 @@ RUN uv run playwright install --with-deps chromium
 # ---------------------------------------------------------------------------
 EXPOSE 8000
 
-# Use uvicorn to serve the FastAPI app defined in src/main.py
+# Use uvicorn to serve the FastAPI app (includes frontend static files)
 CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
