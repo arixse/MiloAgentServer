@@ -14,7 +14,7 @@ WORKDIR /app/client
 
 # 仅复制依赖文件以利用 Docker 层缓存
 COPY client/package.json client/package-lock.json ./
-RUN npm ci
+RUN npm install
 
 # 复制前端源码并构建
 COPY client/ ./
