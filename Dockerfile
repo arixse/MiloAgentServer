@@ -13,7 +13,7 @@ FROM node:22-alpine AS frontend-builder
 WORKDIR /app/client
 
 # 仅复制依赖文件以利用 Docker 层缓存
-COPY client/package.json client/package-lock.json* ./
+COPY client/package.json client/package-lock.json ./
 RUN npm ci
 
 # 复制前端源码并构建
