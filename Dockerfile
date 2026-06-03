@@ -65,7 +65,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
 # Install Python dependencies (production only, no dev group)
-RUN uv sync --frozen --no-dev
+# --no-install-project: source not yet copied, install it later
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy the rest of the backend project
 COPY . .
