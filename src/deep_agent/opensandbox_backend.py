@@ -209,9 +209,8 @@ class OpenSandboxBackend(BaseSandbox):
 
 def _get_connection_config() -> ConnectionConfigSync:
     """获取 OpenSandbox 连接配置。"""
-    domain = os.getenv("OPENSANDBOX_SERVER_URL", "http://182.254.183.29:8080").rstrip("/")
     return ConnectionConfigSync(
-        domain=domain,
+        domain=os.getenv("OPENSANDBOX_SERVER_URL", "http://182.254.183.29:8080"),
         use_server_proxy=True,
         api_key=os.getenv("OPENSANDBOX_API_KEY"),
     )
@@ -327,45 +326,25 @@ async def _restore_skills(user_id: str, sandbox: SandboxSync) -> None:
 
 
 def _create_sandbox_instance() -> SandboxSync:
-    """创建新的 OpenSandbox 沙盒实例（长时间有效）。
-
-    包含重试机制：OpenSandbox 服务器可能偶尔返回临时性错误（如镜像未缓存），
-    最多重试 3 次，指数退避。
-    """
+    """创建新的 OpenSandbox 沙盒实例（长时间有效）。"""
     config = _get_connection_config()
-
-    last_error: Exception | None = None
-    for attempt in range(3):
-        try:
-            sandbox = SandboxSync.create(
-                "opensandbox/code-interpreter:v1.0.2",
-                connection_config=config,
-                timeout=timedelta(hours=SANDBOX_TIMEOUT_HOURS),
-                entrypoint=["/opt/opensandbox/code-interpreter.sh"],
-                env={
-                    "PYTHON_VERSION": "3.11",
-                    "JAVA_VERSION": "17",
-                    "NODE_VERSION": "20",
-                    "GO_VERSION": "1.24",
-                },
-            )
-            print(
-                f"[Sandbox] 创建成功: id={sandbox.id}, "
-                f"timeout={SANDBOX_TIMEOUT_HOURS}h"
-                + (f" (第 {attempt + 1} 次尝试)" if attempt > 0 else "")
-            )
-            return sandbox
-        except Exception as e:
-            last_error = e
-            if attempt < 2:
-                wait = 2 ** attempt  # 1s, 2s
-                print(f"[Sandbox] 创建失败 (第 {attempt + 1} 次尝试): {e}，{wait}s 后重试...")
-                import time
-                time.sleep(wait)
-
-    raise RuntimeError(
-        f"沙盒创建失败（已重试 3 次）: {last_error}"
-    ) from last_error
+    sandbox = SandboxSync.create(
+        "opensandbox/code-interpreter:v1.0.2",
+        connection_config=config,
+        timeout=timedelta(hours=SANDBOX_TIMEOUT_HOURS),
+        entrypoint=["/opt/opensandbox/code-interpreter.sh"],
+        env={
+            "PYTHON_VERSION": "3.11",
+            "JAVA_VERSION": "17",
+            "NODE_VERSION": "20",
+            "GO_VERSION": "1.24",
+        },
+    )
+    print(
+        f"[Sandbox] 创建成功: id={sandbox.id}, "
+        f"timeout={SANDBOX_TIMEOUT_HOURS}h"
+    )
+    return sandbox
 
 
 async def get_or_create_sandbox(thread_id: str, user_id: str) -> OpenSandboxBackend:
