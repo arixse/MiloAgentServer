@@ -21,7 +21,7 @@ from langgraph.checkpoint.mongodb import MongoDBSaver
 from langgraph.store.mongodb import MongoDBStore
 from pymongo import MongoClient
 
-from deep_agent.opensandbox_backend import get_or_create_sandbox, cleanup_sandbox
+from deep_agent.opensandbox_backend import get_or_create_sandbox, cleanup_sandbox, list_sandbox_users
 from deep_agent.sub_agents import get_sub_agents
 from model_provider import deepseek_model
 from tools.file_tool import get_file_tools
@@ -172,17 +172,17 @@ _agent_cache: dict[str, Any] = {}
 _agent_lock = asyncio.Lock()
 
 
-async def _build_agent(thread_id: str, user_id: str):
-    """为一个特定 thread 构建 agent（含 sandbox）。
+async def _build_agent(user_id: str):
+    """为一个特定用户构建 agent（含共享 sandbox）。
 
-    仅在模块内部调用，外部通过 get_or_create_agent() 获取。
+    每个用户一个 sandbox，所有线程共享。仅在模块内部调用。
     """
     mcp_tools = await get_mcp_tools()
     skill_tools = get_skill_tools()
     search_tools = get_search_tools()
     file_tools = get_file_tools()
 
-    opensandbox_backend = await get_or_create_sandbox(thread_id, user_id)
+    opensandbox_backend = await get_or_create_sandbox(user_id)
 
     def backend_factory(runtime):
         return CompositeBackend(
@@ -250,39 +250,48 @@ async def get_or_create_agent(thread_id: str, user_id: str):
         if not existing:
             await save_thread_meta(thread_id, user_id)
 
-        agent = await _build_agent(thread_id, user_id)
+        agent = await _build_agent(user_id)
         _agent_cache[thread_id] = agent
         return agent
 
 
 async def cleanup_thread(thread_id: str) -> bool:
-    """清理指定 thread 的 agent、sandbox 和 Redis 元数据。
+    """清理指定 thread 的 agent 缓存和 Redis 元数据。
+
+    注意：不销毁 sandbox，因为沙盒按用户共享，其他线程可能仍在使用。
 
     Returns:
         True 表示清理成功，False 表示该 thread 不存在。
     """
     agent = _agent_cache.pop(thread_id, None)
-    if agent is None and not await get_thread_meta(thread_id):
+    meta = await get_thread_meta(thread_id)
+    if agent is None and not meta:
         return False
 
-    await cleanup_sandbox(thread_id)
     await delete_thread_meta(thread_id)
-    print(f"[Agent] 已清理: thread_id={thread_id}")
+    print(f"[Agent] 已清理线程: thread_id={thread_id}")
     return True
 
 
 async def cleanup_all() -> int:
-    """清理所有活跃的 agent 和 sandbox（用于服务器 shutdown）。
+    """清理所有活跃的 agent 线程和 sandbox（用于服务器 shutdown）。
 
-    Returns:
-        清理的 thread 数量。
+    线程按 thread 清理，sandbox 按 user 去重后清理。
     """
+    # 1. 清理所有线程的 agent 缓存和元数据
     thread_ids = list(_agent_cache.keys())
-    count = 0
     for tid in thread_ids:
-        if await cleanup_thread(tid):
-            count += 1
-    return count
+        await delete_thread_meta(tid)
+    _agent_cache.clear()
+
+    # 2. 按 user 去重清理 sandbox
+    sandbox_count = 0
+    for user_id in list_sandbox_users():
+        await cleanup_sandbox(user_id)
+        sandbox_count += 1
+
+    print(f"[Agent] 已清理 {len(thread_ids)} 个线程, {sandbox_count} 个 sandbox")
+    return len(thread_ids)
 
 
 def list_active_threads() -> list[str]:

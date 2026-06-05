@@ -141,7 +141,7 @@ async def delete_thread(
     thread_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> dict[str, str]:
-    """删除线程并销毁其 sandbox。需校验线程归属。"""
+    """删除线程。需校验线程归属（沙盒按用户共享，不会销毁）。"""
     user_id = current_user["user_id"]
     await _require_owner(thread_id, user_id)
     ok = await cleanup_thread(thread_id)

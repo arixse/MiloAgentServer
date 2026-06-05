@@ -43,25 +43,25 @@ def _get_sync_redis() -> redis.Redis:
 # ---------------------------------------------------------------------------
 
 def get_sandbox_sync(config: RunnableConfig):
-    """根据 RunnableConfig 中的 thread_id 获取已存在的 OpenSandbox sandbox。
+    """根据 RunnableConfig 中的 user_id 获取已存在的 OpenSandbox sandbox。
 
-    sandbox 在 graph.build_agent() 阶段已通过 get_or_create_sandbox() 创建
-    并存入 _backends 缓存，工具调用时必定可用。
+    sandbox 按 user 共享，在 graph._build_agent() 阶段通过
+    get_or_create_sandbox() 创建并存入 _backends 缓存。
 
     Args:
-        config: LangChain 运行时配置（自动注入），从中提取 thread_id。
+        config: LangChain 运行时配置（自动注入），从中提取 user_id。
 
     Returns:
         SandboxSync 实例。
 
     Raises:
-        RuntimeError: 如果对应 thread_id 的沙盒尚未初始化。
+        RuntimeError: 如果对应用户的沙盒尚未初始化。
     """
-    thread_id = config["configurable"]["thread_id"]
-    backend = _backends.get(thread_id)
+    user_id = config["configurable"]["user_id"]
+    backend = _backends.get(user_id)
     if backend is None:
         raise RuntimeError(
-            f"沙盒尚未就绪 (thread_id={thread_id})，请确保 agent 已正确初始化"
+            f"沙盒尚未就绪 (user_id={user_id})，请确保 agent 已正确初始化"
         )
     return backend.sandbox
 

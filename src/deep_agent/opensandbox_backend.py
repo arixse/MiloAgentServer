@@ -58,7 +58,7 @@ _PERSIST_FILES = [
     "/memories/",  # 目录递归备份
 ]
 
-# 用于缓存不同 thread_id 对应的沙盒后端实例
+# 用于缓存不同 user_id 对应的沙盒后端实例（一个用户一个沙盒）
 _backends: dict[str, "OpenSandboxBackend"] = {}
 
 
@@ -75,35 +75,35 @@ async def _get_redis() -> aioredis.Redis:
     return _redis_client
 
 
-def _redis_key(thread_id: str) -> str:
-    """生成 Redis 键名。"""
-    return f"{REDIS_KEY_PREFIX}:{thread_id}"
+def _redis_key(user_id: str) -> str:
+    """生成 Redis 键名（按 user_id 索引）。"""
+    return f"{REDIS_KEY_PREFIX}:{user_id}"
 
 
-async def _store_sandbox_mapping(thread_id: str, sandbox_id: str) -> None:
-    """将 thread_id → sandbox 的映射关系存储到 Redis。"""
+async def _store_sandbox_mapping(user_id: str, sandbox_id: str) -> None:
+    """将 user_id → sandbox 的映射关系存储到 Redis。"""
     r = await _get_redis()
     mapping = {
         "sandbox_id": sandbox_id,
         "created_at": datetime.now(tz=timezone.utc).isoformat(),
-        "thread_id": thread_id,
+        "user_id": user_id,
     }
-    await r.set(_redis_key(thread_id), json.dumps(mapping))
+    await r.set(_redis_key(user_id), json.dumps(mapping))
 
 
-async def _get_sandbox_mapping(thread_id: str) -> dict | None:
-    """从 Redis 查询 thread_id 对应的 sandbox 映射。"""
+async def _get_sandbox_mapping(user_id: str) -> dict | None:
+    """从 Redis 查询 user_id 对应的 sandbox 映射。"""
     r = await _get_redis()
-    data = await r.get(_redis_key(thread_id))
+    data = await r.get(_redis_key(user_id))
     if data:
         return json.loads(data)
     return None
 
 
-async def _delete_sandbox_mapping(thread_id: str) -> None:
-    """从 Redis 删除 thread_id 对应的 sandbox 映射。"""
+async def _delete_sandbox_mapping(user_id: str) -> None:
+    """从 Redis 删除 user_id 对应的 sandbox 映射。"""
     r = await _get_redis()
-    await r.delete(_redis_key(thread_id))
+    await r.delete(_redis_key(user_id))
 
 
 class OpenSandboxBackend(BaseSandbox):
@@ -558,28 +558,27 @@ def _create_sandbox_instance() -> SandboxSync:
     return sandbox
 
 
-async def get_or_create_sandbox(thread_id: str, user_id: str) -> OpenSandboxBackend:
-    """获取当前线程缓存的沙盒，如果不存在则创建一个新的。
+async def get_or_create_sandbox(user_id: str) -> OpenSandboxBackend:
+    """获取当前用户的沙盒，如果不存在则创建一个新的。
 
-    查找顺序：
-    1. 内存缓存（当前会话）
+    一个用户一个沙盒，所有线程共享。查找顺序：
+    1. 内存缓存（当前进程）
     2. Redis 映射 → 尝试重连已有沙盒
     3. 以上均不可用 → 创建新沙盒并更新 Redis 映射
 
     Args:
-        thread_id: 对话线程 ID（sandbox 按 thread 隔离）。
-        user_id: 用户 ID（用于 skill 恢复，按 user 维度）。
+        user_id: 用户 ID。
     """
     # 1. 优先从内存缓存查找
-    if backend := _backends.get(thread_id):
+    if backend := _backends.get(user_id):
         return backend
 
     # 2. 查询 Redis 中的历史映射，尝试重连已有沙盒
-    existing_mapping = await _get_sandbox_mapping(thread_id)
+    existing_mapping = await _get_sandbox_mapping(user_id)
     if existing_mapping:
         sandbox_id = existing_mapping["sandbox_id"]
         print(
-            f"[Redis] 发现已存在的 sandbox 映射: thread_id={thread_id}, "
+            f"[Redis] 发现已存在的 sandbox 映射: user_id={user_id}, "
             f"sandbox_id={sandbox_id}, "
             f"created_at={existing_mapping['created_at']}"
         )
@@ -609,9 +608,9 @@ async def get_or_create_sandbox(thread_id: str, user_id: str) -> OpenSandboxBack
                 raise
 
             backend = OpenSandboxBackend(sandbox, user_id=user_id)
-            _backends[thread_id] = backend
+            _backends[user_id] = backend
             print(
-                f"[Redis] ✓ 成功重连 sandbox: thread_id={thread_id}, "
+                f"[Redis] ✓ 成功重连 sandbox: user_id={user_id}, "
                 f"sandbox_id={sandbox_id}"
             )
             return backend
@@ -622,7 +621,7 @@ async def get_or_create_sandbox(thread_id: str, user_id: str) -> OpenSandboxBack
                 f"将创建新实例并更新 Redis 映射"
             )
             # 删除失效的 Redis 映射（创建新沙盒后会重新写入）
-            await _delete_sandbox_mapping(thread_id)
+            await _delete_sandbox_mapping(user_id)
 
     # 3. 创建新的沙盒实例
     sandbox = _create_sandbox_instance()
@@ -631,29 +630,34 @@ async def get_or_create_sandbox(thread_id: str, user_id: str) -> OpenSandboxBack
     # 初始化沙盒文件系统（目录 + AGENTS.md，仅新创建的沙盒）
     _init_sandbox_filesystem(sandbox, user_id)
 
-    # 从 Redis 记录中恢复该用户之前安装的 skill（sandbox 意外销毁后的自动恢复）
+    # 从 MongoDB 恢复该用户之前安装的 skill
     await _restore_skills(user_id, sandbox)
 
-    _backends[thread_id] = backend
+    _backends[user_id] = backend
 
     # 4. 将映射关系持久化到 Redis
-    await _store_sandbox_mapping(thread_id, backend.sandbox.id)
+    await _store_sandbox_mapping(user_id, backend.sandbox.id)
     print(
-        f"[Redis] sandbox 映射已存储: thread_id={thread_id}, "
+        f"[Redis] sandbox 映射已存储: user_id={user_id}, "
         f"sandbox_id={backend.sandbox.id}"
     )
 
     return backend
 
 
-async def cleanup_sandbox(thread_id: str):
-    """在对话结束后清理并销毁指定的沙盒实例。
+def list_sandbox_users() -> list[str]:
+    """返回当前活跃（内存中已加载）的 sandbox 用户 ID 列表。"""
+    return list(_backends.keys())
 
-    注意：skill 记录属于用户而非会话，此处不删除。
+
+async def cleanup_sandbox(user_id: str):
+    """清理并销毁指定用户的沙盒实例。
+
+    注意：skill 和 memories 已持久化到 MongoDB，此处不删除。
     """
-    if backend := _backends.pop(thread_id, None):
+    if backend := _backends.pop(user_id, None):
         backend.close()
     # 清理 Redis 中的 sandbox 映射记录
-    await _delete_sandbox_mapping(thread_id)
-    print(f"[Redis] sandbox 映射已清理: thread_id={thread_id}")
+    await _delete_sandbox_mapping(user_id)
+    print(f"[Redis] sandbox 映射已清理: user_id={user_id}")
 
