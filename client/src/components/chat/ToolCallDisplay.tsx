@@ -9,8 +9,14 @@ interface ToolCallDisplayProps {
 
 export function ToolCallDisplay({ toolCall }: ToolCallDisplayProps) {
   const [expanded, setExpanded] = useState(false);
-  const isStreamingArgs = toolCall.args && Object.keys(toolCall.args).length === 1 && '_streaming' in toolCall.args;
+  // Only show streaming animation while still running; completed tools may have
+  // residual _streaming args if tool_calls event never fired to replace them
+  const isStreamingArgs = toolCall.status === 'running'
+    && toolCall.args && Object.keys(toolCall.args).length === 1 && '_streaming' in toolCall.args;
   const hasArgs = toolCall.args && Object.keys(toolCall.args).filter(k => k !== '_streaming').length > 0;
+  // Completed tool with residual streaming args — show the raw arg string as regular text
+  const hasFallbackArgs = toolCall.status !== 'running'
+    && toolCall.args && '_streaming' in toolCall.args;
 
   const statusIcon = toolCall.status === 'completed' ? (
     <CheckCircle className="w-3.5 h-3.5 text-green-500 shrink-0" />
@@ -53,7 +59,7 @@ export function ToolCallDisplay({ toolCall }: ToolCallDisplayProps) {
             {statusLabel}
           </span>
         )}
-        {(hasArgs || isStreamingArgs || toolCall.result != null) && (
+        {(hasArgs || isStreamingArgs || hasFallbackArgs || toolCall.result != null) && (
           <ChevronDown className={cn('w-3.5 h-3.5 text-gray-400 transition-transform', expanded && 'rotate-180')} />
         )}
       </button>
@@ -65,6 +71,14 @@ export function ToolCallDisplay({ toolCall }: ToolCallDisplayProps) {
             <div className="px-3 py-2 bg-white">
               <p className="text-xs text-gray-400 mb-1 font-medium">参数</p>
               <pre className="text-xs text-blue-600 font-mono whitespace-pre-wrap break-all max-h-32 overflow-y-auto animate-pulse">
+                {toolCall.args?._streaming as string}
+              </pre>
+            </div>
+          )}
+          {hasFallbackArgs && (
+            <div className="px-3 py-2 bg-white">
+              <p className="text-xs text-gray-400 mb-1 font-medium">参数</p>
+              <pre className="text-xs text-gray-600 font-mono whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
                 {toolCall.args?._streaming as string}
               </pre>
             </div>

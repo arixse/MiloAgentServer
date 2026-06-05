@@ -181,7 +181,8 @@ function streamReducer(state: StreamState, action: StreamAction): StreamState {
       return { ...state, messages: msgs };
     }
     case 'UPDATE_TOOL_CALL': {
-      // Set the result on a tool_call block by ID (or name+status fallback)
+      // Set the result on a tool_call block by ID (or name+status fallback).
+      // Also parse streaming args into real args if the tool_calls event never fired.
       const msgs = [...state.messages];
       const last = msgs[msgs.length - 1];
       if (last && last.role === 'assistant') {
@@ -192,9 +193,18 @@ function streamReducer(state: StreamState, action: StreamAction): StreamState {
               (action.payload.toolCallId && tc.id === action.payload.toolCallId) ||
               (tc.name === action.payload.name && tc.status === 'running')
             ) {
+              let resolvedArgs = tc.args;
+              // If args were never resolved (only _streaming), try to parse them
+              if (resolvedArgs && '_streaming' in resolvedArgs && Object.keys(resolvedArgs).length === 1) {
+                try {
+                  resolvedArgs = JSON.parse(resolvedArgs._streaming as string);
+                } catch {
+                  // Leave as-is if parsing fails
+                }
+              }
               return {
                 type: 'tool_call' as const,
-                toolCall: { ...tc, status: 'completed' as const, result: action.payload.result },
+                toolCall: { ...tc, args: resolvedArgs, status: 'completed' as const, result: action.payload.result },
               };
             }
           }
@@ -251,13 +261,13 @@ export function StreamProvider({ children }: { children: ReactNode }) {
   const abortRef = useRef<AbortController | null>(null);
 
   const loadMessages = useCallback(async (threadId: string) => {
+    // Clear immediately to prevent flash of old thread's messages
+    dispatch({ type: 'CLEAR_MESSAGES' });
     try {
       const threadState = await threadsApi.getThreadState(threadId);
       const rawMessages = (threadState.values?.messages as unknown[]) || [];
       if (rawMessages.length > 0) {
         dispatch({ type: 'LOAD_MESSAGES', payload: mapStateMessages(rawMessages) });
-      } else {
-        dispatch({ type: 'CLEAR_MESSAGES' });
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '未知错误';
