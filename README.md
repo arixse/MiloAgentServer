@@ -1,6 +1,6 @@
 # MiloAgent
 
-A self-hosted Deep Agent server powered by [LangGraph](https://github.com/langchain-ai/langgraph) and [DeepAgents](https://github.com/langchain-ai/deepagents), with a React chat interface, streaming responses, sandboxed code execution, and dynamic skill installation.
+你的私人 AI 助手。像聊天一样让它帮你搜索信息、处理文件、编写代码、撰写报告——复杂任务自动分解、逐步执行，结果实时呈现。
 
 [![CI](https://github.com/arixse/MiloAgentServer/actions/workflows/build-image.yml/badge.svg)](https://github.com/arixse/MiloAgentServer/actions/workflows/build-image.yml)
 

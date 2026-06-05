@@ -1,6 +1,6 @@
 # MiloAgent
 
-基于 [LangGraph](https://github.com/langchain-ai/langgraph) 和 [DeepAgents](https://github.com/langchain-ai/deepagents) 的自部署 Deep Agent 服务，配备 React 聊天界面、流式响应、沙盒代码执行和动态 Skill 安装。
+你的私人 AI 助手。像聊天一样让它帮你搜索信息、处理文件、编写代码、撰写报告——复杂任务自动分解、逐步执行，结果实时呈现。
 
 [![CI](https://github.com/arixse/MiloAgentServer/actions/workflows/build-image.yml/badge.svg)](https://github.com/arixse/MiloAgentServer/actions/workflows/build-image.yml)
 
