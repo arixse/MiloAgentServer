@@ -43,7 +43,7 @@ logger.debug("root_path: %s", root_path)
 # ---------------------------------------------------------------------------
 # MongoDB / 持久化配置
 # ---------------------------------------------------------------------------
-USE_MONGO_PERSISTENCE = os.getenv("USE_MONGO_PERSISTENCE", "").lower() == "true"
+USE_MONGO_PERSISTENCE = True
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "MiloAgent")
 
@@ -85,33 +85,13 @@ def utc_now() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Thread 持久化 —— Redis 存储线程元数据
+# Thread 持久化 —— MongoDB 存储线程元数据
 # ---------------------------------------------------------------------------
-import redis.asyncio as aioredis
 
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-REDIS_THREAD_KEY_PREFIX = "milo_agent:thread"
-
-_redis: aioredis.Redis | None = None
-
-
-async def _get_redis() -> aioredis.Redis:
-    """获取 Redis 异步客户端（单例）。"""
-    global _redis
-    if _redis is None:
-        _redis = aioredis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB,
-            decode_responses=True,
-        )
-    return _redis
-
-
-def _thread_key(thread_id: str) -> str:
-    return f"{REDIS_THREAD_KEY_PREFIX}:{thread_id}"
+def _thread_collection():
+    """获取线程元数据的 MongoDB collection。"""
+    client = _get_mongo_client()
+    return client[MONGO_DB_NAME]["threads"]
 
 
 async def save_thread_meta(
@@ -119,53 +99,66 @@ async def save_thread_meta(
     user_id: str = "default_user",
     metadata: dict | None = None,
 ) -> None:
-    """持久化线程元数据到 Redis。"""
+    """持久化线程元数据到 MongoDB。"""
     if not user_id:
         raise ValueError("user_id cannot be empty")
-    r = await _get_redis()
-    data: dict[str, str] = {
+    doc = {
         "thread_id": thread_id,
         "user_id": user_id,
         "created_at": datetime.now(tz=timezone.utc).isoformat(),
+        "metadata": metadata,
     }
-    if metadata:
-        data["metadata"] = json.dumps(metadata, ensure_ascii=False)
-    await r.hset(_thread_key(thread_id), mapping=data)
+    _thread_collection().update_one(
+        {"thread_id": thread_id},
+        {"$set": doc},
+        upsert=True,
+    )
 
 
 async def get_thread_meta(thread_id: str) -> dict | None:
-    """从 Redis 读取线程元数据。"""
-    r = await _get_redis()
-    data = await r.hgetall(_thread_key(thread_id))
-    return data if data else None
+    """从 MongoDB 读取线程元数据。"""
+    doc = _thread_collection().find_one({"thread_id": thread_id})
+    if doc:
+        return {
+            "thread_id": doc["thread_id"],
+            "user_id": doc.get("user_id", ""),
+            "created_at": doc.get("created_at", ""),
+            "metadata": json.dumps(doc["metadata"]) if doc.get("metadata") else "",
+        }
+    return None
 
 
 async def delete_thread_meta(thread_id: str) -> None:
-    """从 Redis 删除线程元数据。"""
-    r = await _get_redis()
-    await r.delete(_thread_key(thread_id))
+    """从 MongoDB 删除线程元数据。"""
+    _thread_collection().delete_one({"thread_id": thread_id})
 
 
 async def list_all_threads() -> list[dict]:
-    """从 Redis 列出所有线程元数据（无用户过滤，管理用）。"""
-    r = await _get_redis()
-    keys = await r.keys(f"{REDIS_THREAD_KEY_PREFIX}:*")
-    if not keys:
-        return []
+    """从 MongoDB 列出所有线程元数据（管理用）。"""
+    docs = _thread_collection().find().sort("created_at", -1)
     results = []
-    for key in keys:
-        data = await r.hgetall(key)
-        if data:
-            results.append(data)
-    # 按创建时间倒序
-    results.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    for doc in docs:
+        results.append({
+            "thread_id": doc["thread_id"],
+            "user_id": doc.get("user_id", ""),
+            "created_at": doc.get("created_at", ""),
+            "metadata": json.dumps(doc["metadata"]) if doc.get("metadata") else "",
+        })
     return results
 
 
 async def list_threads_by_user(user_id: str) -> list[dict]:
-    """从 Redis 列出指定用户的所有线程元数据。"""
-    all_threads = await list_all_threads()
-    return [t for t in all_threads if t.get("user_id") == user_id]
+    """从 MongoDB 列出指定用户的所有线程元数据。"""
+    docs = _thread_collection().find({"user_id": user_id}).sort("created_at", -1)
+    results = []
+    for doc in docs:
+        results.append({
+            "thread_id": doc["thread_id"],
+            "user_id": doc.get("user_id", ""),
+            "created_at": doc.get("created_at", ""),
+            "metadata": json.dumps(doc["metadata"]) if doc.get("metadata") else "",
+        })
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -276,14 +269,12 @@ async def cleanup_thread(thread_id: str) -> bool:
 
 
 async def cleanup_all() -> int:
-    """清理所有活跃的 agent 线程和 sandbox（用于服务器 shutdown）。
+    """清理所有活跃的 agent 缓存和 sandbox（用于服务器 shutdown）。
 
-    线程按 thread 清理，sandbox 按 user 去重后清理。
+    注意：不删除线程元数据或对话记录，用户重启后可继续对话。
     """
-    # 1. 清理所有线程的 agent 缓存和元数据
-    thread_ids = list(_agent_cache.keys())
-    for tid in thread_ids:
-        await delete_thread_meta(tid)
+    # 1. 清空 agent 内存缓存（不删除持久化数据）
+    thread_count = len(_agent_cache)
     _agent_cache.clear()
 
     # 2. 按 user 去重清理 sandbox
@@ -292,8 +283,9 @@ async def cleanup_all() -> int:
         await cleanup_sandbox(user_id)
         sandbox_count += 1
 
-    logger.info("已清理 %s 个线程, %s 个 sandbox", len(thread_ids), sandbox_count)
-    return len(thread_ids)
+    logger.info("已清理 %s 个 agent 缓存, %s 个 sandbox（线程和对话记录已保留）",
+                thread_count, sandbox_count)
+    return thread_count
 
 
 def list_active_threads() -> list[str]:
