@@ -237,13 +237,15 @@ async def run_agent_stream(
 
                 if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
                     event["tool_calls"] = [
-                        {"name": tc.get("name"), "args": tc.get("args"), "id": tc.get("id", "")}
-                        for tc in msg_chunk.tool_calls
+                        {"name": tc.get("name"), "args": tc.get("args"),
+                         "id": tc.get("id") or f"{tc.get('name')}_{tc.get('index', i)}"}
+                        for i, tc in enumerate(msg_chunk.tool_calls)
                     ]
 
                 if hasattr(msg_chunk, "tool_call_chunks") and msg_chunk.tool_call_chunks:
                     event["tool_call_chunks"] = [
-                        {"id": c.get("id", ""), "name": c.get("name", ""), "content": c.get("args", "")}
+                        {"name": c.get("name", ""), "content": c.get("args", ""),
+                         "id": c.get("id") or f"{c.get('name', '')}_{c.get('index', '')}"}
                         for c in msg_chunk.tool_call_chunks
                     ]
 
