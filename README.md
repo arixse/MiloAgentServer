@@ -1,6 +1,6 @@
 # MiloAgent
 
-你的私人 AI 助手。像聊天一样让它帮你搜索信息、处理文件、编写代码、撰写报告——复杂任务自动分解、逐步执行，结果实时呈现。
+Your personal AI assistant. Just chat with it to search for information, process files, write code, or draft reports. It automatically breaks down complex tasks and executes them step by step, showing you the results in real time.
 
 [![CI](https://github.com/arixse/MiloAgentServer/actions/workflows/build-image.yml/badge.svg)](https://github.com/arixse/MiloAgentServer/actions/workflows/build-image.yml)
 
