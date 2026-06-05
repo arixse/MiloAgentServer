@@ -9,7 +9,7 @@ import { Eye, EyeOff } from 'lucide-react';
 export function ChatArea() {
   const { activeThreadId } = useThreads();
   const { isLoading, submit, stop, loadMessages } = useStream();
-  const [showToolCalls, setShowToolCalls] = useState(true);
+  const [showToolCalls, setShowToolCalls] = useState(false);
 
   // Load messages when active thread changes, abort any in-flight stream
   useEffect(() => {
@@ -43,10 +43,10 @@ export function ChatArea() {
               : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
             }
           `}
-          title={showToolCalls ? '隐藏工具调用' : '显示工具调用'}
+          title={showToolCalls ? '隐藏详情' : '显示详情'}
         >
           {showToolCalls ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-          <span>工具调用</span>
+          <span>显示详情</span>
         </button>
       </div>
       <MessagesList showToolCalls={showToolCalls} />
