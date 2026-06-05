@@ -60,28 +60,7 @@ cp .env.example .env
 # Edit .env with your API keys and connection strings
 ```
 
-Key variables:
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DEEPSEEK_API_KEY` | DeepSeek API key | — |
-| `DEEPSEEK_MODEL_NAME` | Model name | `deepseek-v4-flash` |
-| `OPENSANDBOX_SERVER_URL` | OpenSandbox endpoint | `http://182.254.183.29:8080` |
-| `OPENSANDBOX_API_KEY` | OpenSandbox API key | — |
-| `REDIS_HOST` | Redis host | `localhost` |
-| `MONGO_URI` | MongoDB connection string | `mongodb://localhost:27017` |
-| `USE_MONGO_PERSISTENCE` | Enable MongoDB persistence | `false` |
-| `JWT_SECRET_KEY` | JWT signing key | auto-generated dev key |
-
-### 2. Start with Docker Compose
-
-```bash
-docker compose up -d
-```
-
-This starts the full stack — app, Redis, and MongoDB — on port **8000**. Open [http://localhost:8000](http://localhost:8000) to use the app.
-
-### 3. Local development
+### 2. Local development
 
 **Backend:**
 
@@ -196,26 +175,128 @@ Additional tools can be integrated via MCP (Model Context Protocol).
 
 ## Deployment
 
-### Docker image
-
 The Dockerfile uses a **multi-stage build**:
 
 1. **Stage 1** (`node:22-alpine`) — builds the React frontend into `client/dist/`
-2. **Stage 2** (`python:3.11-slim`) — installs Python dependencies, copies the frontend build, and serves everything with Uvicorn
+2. **Stage 2** (`python:3.11-slim`) — installs Python dependencies, copies the frontend build, and serves everything with Uvicorn on port 8000
+
+In production, the frontend is served directly by FastAPI — no separate web server needed.
+
+### Option 1: Docker Compose (recommended)
+
+Pull the pre-built image or build locally, then start the full stack:
 
 ```bash
-docker build -t milo-agent:latest .
-docker run -p 8000:8000 --env-file .env milo-agent:latest
+# Clone the repository
+git clone https://github.com/arixse/MiloAgentServer.git
+cd MiloAgentServer
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+
+# Start all services (app + Redis + MongoDB)
+docker compose up -d
 ```
 
-### GitHub Actions
+The app is available at **http://localhost:8000**. The compose file includes:
 
-Creating a [GitHub Release](https://github.com/arixse/MiloAgentServer/releases) triggers an automatic build that pushes the image to GHCR:
+| Service | Image | Port |
+|---------|-------|------|
+| `app` | `milo-agent:latest` (built locally) | 8000 |
+| `redis` | `redis:7-alpine` | 6379 |
+| `mongodb` | `mongo:7` | 27017 |
+
+All services are connected via an internal `milo-net` bridge network. Redis and MongoDB data are persisted in named volumes.
+
+To update to a new version:
 
 ```bash
+git pull
+docker compose up -d --build
+```
+
+### Option 2: Pre-built image from GHCR
+
+Creating a [GitHub Release](https://github.com/arixse/MiloAgentServer/releases) triggers an automatic build and push to GHCR. To deploy with the pre-built image:
+
+```bash
+# Pull the image
 docker pull ghcr.io/arixse/milo-agent-server:latest
-docker pull ghcr.io/arixse/milo-agent-server:1.0.0  # specific version
+
+# Start Redis and MongoDB separately
+docker run -d --name milo-redis -p 6379:6379 redis:7-alpine
+docker run -d --name milo-mongo -p 27017:27017 mongo:7
+
+# Start the app
+docker run -d \
+  --name milo-agent \
+  -p 8000:8000 \
+  --env-file .env \
+  -e REDIS_HOST=host.docker.internal \
+  -e MONGO_URI=mongodb://host.docker.internal:27017 \
+  ghcr.io/arixse/milo-agent-server:latest
 ```
+
+> [!NOTE]
+> On Linux, replace `host.docker.internal` with the host machine's IP or use `--network host`.
+
+### Option 3: Manual deployment
+
+**Prerequisites:** Python 3.11+, Node.js 22+, Redis, MongoDB.
+
+```bash
+# Build the frontend
+cd client
+npm install && npm run build
+cd ..
+
+# Install Python dependencies
+uv sync --no-dev
+
+# Start the server
+uv run uvicorn src.main:app --host 0.0.0.0 --port 8000
+```
+
+Place the app behind a reverse proxy (nginx, Caddy) for TLS termination:
+
+```nginx
+# Example nginx configuration
+server {
+    listen 443 ssl;
+    server_name your-domain.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;  # Required for SSE streaming
+    }
+}
+```
+
+> [!IMPORTANT]
+> SSE streaming requires disabling proxy buffering (`proxy_buffering off` in nginx, `X-Accel-Buffering: no` header otherwise).
+
+### Environment variables
+
+| Variable                      | Required | Default |
+|-------------------------------|----------|--|
+| `MODEL_API_KEY`               | Yes | — |
+| `MODEL_NAME`                  | No | |
+| `MODEL_BASE_URL`              | No | |
+| `OPENSANDBOX_SERVER_URL`      | Yes |  |
+| `OPENSANDBOX_API_KEY`         | Yes | — |
+| `REDIS_HOST`                  | No | `localhost` |
+| `REDIS_PORT`                  | No | `6379` |
+| `MONGO_URI`                   | No | `mongodb://localhost:27017` |
+| `MONGO_DB_NAME`               | No | `MiloAgent` |
+| `USE_MONGO_PERSISTENCE`       | No | `false` |
+| `JWT_SECRET_KEY`              | No | auto-generated |
+| `JWT_ALGORITHM`               | No | `HS256` |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `1440` |
+| `SANDBOX_TIMEOUT_HOURS`       | No | `24` |
+| `TAVILY_API_KEY`              | No | — |
 
 ## Sandbox lifecycle
 
@@ -236,16 +317,3 @@ Skills are zip archives installed into the sandbox's `/skills/` directory:
 
 > [!NOTE]
 > Skill state does not persist across sandbox rebuilds — only the installation records are kept. Skills that modify system state (e.g., `apt-get install`) will need to be re-run.
-
-## Authentication flow
-
-```
-POST /auth/register  →  create user in MongoDB
-POST /auth/login     →  verify credentials, return JWT access token
-         ↓
-  All subsequent requests include Authorization: Bearer <token>
-         ↓
-  get_current_user extracts user_id from JWT
-         ↓
-  Threads and sandboxes are scoped to the authenticated user
-```
