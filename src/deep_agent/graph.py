@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+
+logger = logging.getLogger("milo.agent")
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -34,8 +37,8 @@ load_dotenv()
 
 root_path = get_root_path()
 skill_path = os.path.join(root_path, "skills")
-print(f"skill_path: {skill_path}")
-print(f"root_path: {root_path}")
+logger.debug("skill_path: %s", skill_path)
+logger.debug("root_path: %s", root_path)
 
 # ---------------------------------------------------------------------------
 # MongoDB / 持久化配置
@@ -51,7 +54,7 @@ def _get_mongo_client() -> MongoClient:
     global _mongo_client
     if _mongo_client is None:
         _mongo_client = MongoClient(MONGO_URI)
-        print(f"[MongoDB] 已连接到 {MONGO_URI}")
+        logger.info("已连接到 MongoDB: %s", MONGO_URI)
     return _mongo_client
 
 
@@ -206,15 +209,14 @@ async def _build_agent(user_id: str):
         agent_kwargs["store"] = MongoDBStore(
             store_db["persistent_store"],
         )
-        print(
-            f"[MongoDB] 启用自定义持久化: "
-            f"checkpointer={MONGO_DB_NAME}_checkpoints, "
-            f"store={MONGO_DB_NAME}_store/persistent_store"
+        logger.info(
+            "MongoDB 持久化: checkpointer=%s_checkpoints, store=%s_store",
+            MONGO_DB_NAME, MONGO_DB_NAME,
         )
     else:
         from langgraph.store.memory import InMemoryStore
         agent_kwargs["store"] = InMemoryStore()
-        print("[持久化] 未启用 MongoDB，使用内存存储（重启后数据丢失）")
+        logger.info("未启用 MongoDB，使用内存存储（重启后数据丢失）")
 
     agent = create_deep_agent(
         model=DEFAULT_MODEL,
@@ -243,7 +245,7 @@ async def get_or_create_agent(thread_id: str, user_id: str):
     async with _agent_lock:
         if thread_id in _agent_cache:
             return _agent_cache[thread_id]
-        print(f"[Agent] 创建新 agent: thread_id={thread_id}, user_id={user_id}")
+        logger.info("创建新 agent: thread_id=%s, user_id=%s", thread_id, user_id)
 
         # 若 Redis 无此线程记录则写入（API 侧可能已提前 create_thread）
         existing = await get_thread_meta(thread_id)
@@ -269,7 +271,7 @@ async def cleanup_thread(thread_id: str) -> bool:
         return False
 
     await delete_thread_meta(thread_id)
-    print(f"[Agent] 已清理线程: thread_id={thread_id}")
+    logger.info("已清理线程: thread_id=%s", thread_id)
     return True
 
 
@@ -290,7 +292,7 @@ async def cleanup_all() -> int:
         await cleanup_sandbox(user_id)
         sandbox_count += 1
 
-    print(f"[Agent] 已清理 {len(thread_ids)} 个线程, {sandbox_count} 个 sandbox")
+    logger.info("已清理 %s 个线程, %s 个 sandbox", len(thread_ids), sandbox_count)
     return len(thread_ids)
 
 

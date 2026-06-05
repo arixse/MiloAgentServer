@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import shutil
@@ -12,6 +13,8 @@ from dotenv import load_dotenv
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from playwright.sync_api import sync_playwright
+
+logger = logging.getLogger("milo.tools")
 
 from deep_agent.opensandbox_backend import persist_skill_zip
 from tools.sandbox_utils import get_sandbox_sync
@@ -163,7 +166,7 @@ def _get_modelscope_download_url(skill_url: str) -> str | None:
             finally:
                 browser.close()
     except Exception as e:
-        print(f"[modelscope] Playwright 渲染失败: {e}")
+        logger.warning("Playwright 渲染失败: %s", e)
         return None
 
     soup = BeautifulSoup(html, "html.parser")
@@ -234,7 +237,7 @@ def install_skill_from_clawhub_url(skill_url: str, config: RunnableConfig) -> st
     if not download_url:
         return f"未在页面 {skill_url} 中找到 skill 下载链接"
 
-    print(f"[clawhub] 下载链接: {download_url}")
+    logger.info("clawhub 下载链接: %s", download_url)
     return _download_and_install_skill(download_url, config)
 
 
@@ -255,7 +258,7 @@ def install_skill_from_modelscope_url(skill_url: str, config: RunnableConfig) ->
     if not download_url:
         return f"未在页面 {skill_url} 中找到 skill 下载链接"
 
-    print(f"[modelscope] 下载链接: {download_url}")
+    logger.info("modelscope 下载链接: %s", download_url)
     return _download_and_install_skill(download_url, config)
 
 
@@ -276,7 +279,7 @@ def install_skill_from_skillhub_url(skill_url: str, config: RunnableConfig) -> s
     if not download_url:
         return f"未在页面 {skill_url} 中找到 skill 下载链接"
 
-    print(f"[skillhub] 下载链接: {download_url}")
+    logger.info("skillhub 下载链接: %s", download_url)
     return _download_and_install_skill(download_url, config)
 
 

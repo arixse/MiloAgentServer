@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from datetime import datetime, timedelta, timezone
 
 import asyncio
 import redis.asyncio as aioredis
+
+logger = logging.getLogger("milo.sandbox")
 from deepagents.backends.protocol import (
     ExecuteResponse,
     FileDownloadResponse,
@@ -138,14 +141,9 @@ class OpenSandboxBackend(BaseSandbox):
                     return
                 try:
                     self.sandbox.renew(renew_timeout)
-                    print(
-                        f"[Sandbox {self.sandbox.id}] renew 成功 "
-                        f"(timeout={self._timeout_hours}h)"
-                    )
+                    logger.debug("renew 成功: %s (timeout=%sh)", self.sandbox.id, self._timeout_hours)
                 except Exception as e:
-                    print(
-                        f"[Sandbox {self.sandbox.id}] renew 失败: {e}"
-                    )
+                    logger.warning("renew 失败: %s: %s", self.sandbox.id, e)
 
         self._renew_thread = threading.Thread(
             target=_renew_worker,
@@ -153,10 +151,7 @@ class OpenSandboxBackend(BaseSandbox):
             daemon=True,
         )
         self._renew_thread.start()
-        print(
-            f"[Sandbox {self.sandbox.id}] 已启动续期线程 "
-            f"(timeout={self._timeout_hours}h, interval={self._renew_interval}h)"
-        )
+        logger.debug("续期线程已启动: %s (timeout=%sh)", self.sandbox.id, self._timeout_hours)
 
     def _stop_renew_loop(self) -> None:
         """停止后台续期线程。"""
@@ -165,7 +160,7 @@ class OpenSandboxBackend(BaseSandbox):
         self._stop_renew.set()
         self._renew_thread.join(timeout=5)
         self._renew_thread = None
-        print(f"[Sandbox {self.sandbox.id}] 续期线程已停止")
+        logger.debug("续期线程已停止: %s", self.sandbox.id)
 
     # ------------------------------------------------------------------
     # Protocol methods
@@ -221,7 +216,7 @@ class OpenSandboxBackend(BaseSandbox):
             try:
                 _backup_sandbox_files(self.sandbox, self._user_id)
             except Exception as e:
-                print(f"[Sandbox {self.sandbox.id}] 备份失败: {e}")
+                logger.warning("沙盒备份失败: %s: %s", self.sandbox.id, e)
         # 2. 停止续期并销毁沙盒
         self._stop_renew_loop()
         if self.sandbox:
@@ -249,7 +244,7 @@ def _get_mongo() -> MongoClient:
     global _mongo_client
     if _mongo_client is None:
         _mongo_client = MongoClient(MONGO_URI)
-        print(f"[MongoDB Persist] 已连接到 {MONGO_URI}")
+        logger.info("已连接到 MongoDB: %s", MONGO_URI)
     return _mongo_client
 
 
@@ -303,9 +298,9 @@ def _backup_sandbox_files(sandbox: SandboxSync, user_id: str) -> int:
                 _persist_file_to_mongo(user_id, file_path, content)
                 count += 1
         except Exception as e:
-            print(f"[MongoDB Persist] 备份失败 {file_path}: {e}")
+            logger.warning("文件备份失败: %s: %s", file_path, e)
     if count:
-        print(f"[MongoDB Persist] 已备份 {count} 个文件 (user_id={user_id})")
+        logger.info("已备份 %s 个文件 (user_id=%s)", count, user_id)
     return count
 
 
@@ -330,15 +325,15 @@ def _restore_sandbox_files(sandbox: SandboxSync, user_id: str) -> int:
                 )
                 if result.exit_code == 0:
                     count += 1
-                    print(f"[MongoDB Persist] 已恢复目录: {file_path}")
+                    logger.info("已恢复目录: %s", file_path)
             else:
                 sandbox.files.write_file(file_path, content)
                 count += 1
-                print(f"[MongoDB Persist] 已恢复文件: {file_path} ({len(content)} bytes)")
+                logger.info("已恢复文件: %s (%s bytes)", file_path, len(content))
         except Exception as e:
-            print(f"[MongoDB Persist] 恢复失败 {file_path}: {e}")
+            logger.warning("文件恢复失败: %s: %s", file_path, e)
     if count:
-        print(f"[MongoDB Persist] 已恢复 {count} 个文件 (user_id={user_id})")
+        logger.info("已恢复 %s 个文件 (user_id=%s)", count, user_id)
     return count
 
 
@@ -358,9 +353,9 @@ def persist_skill_zip(user_id: str, skill_name: str, zip_content: bytes) -> None
     """
     try:
         _persist_file_to_mongo(user_id, f"/skills/{skill_name}.zip", zip_content)
-        print(f"[MongoDB Persist] skill zip 已存储: {skill_name} ({len(zip_content)} bytes)")
+        logger.info("skill zip 已存储: %s (%s bytes)", skill_name, len(zip_content))
     except Exception as e:
-        print(f"[MongoDB Persist] skill zip 存储失败 ({skill_name}): {e}")
+        logger.warning("skill zip 存储失败: %s: %s", skill_name, e)
 
 
 def restore_skill_zip(user_id: str, skill_name: str) -> bytes | None:
@@ -403,7 +398,7 @@ def list_persisted_skills(user_id: str) -> list[str]:
                 names.append(name)
         return names
     except Exception as e:
-        print(f"[MongoDB Persist] 列出 skill 失败 (user={user_id}): {e}")
+        logger.warning("列出 skill 失败 (user=%s): %s", user_id, e)
         return []
 
 
@@ -414,7 +409,7 @@ def _init_sandbox_filesystem(sandbox: SandboxSync, user_id: str) -> None:
     """
     # 1. 创建 /skills 和 /memories 目录
     sandbox.commands.run("mkdir -p /skills /memories")
-    print("[Sandbox Init] 已创建目录: /skills, /memories")
+    logger.info("已创建目录: /skills, /memories")
 
     # 1.5 确保 pip 可用（镜像可能未预装）
     pip_check = sandbox.commands.run(
@@ -424,19 +419,18 @@ def _init_sandbox_filesystem(sandbox: SandboxSync, user_id: str) -> None:
         "python3 -m pip --version 2>/dev/null && echo 'pip ready' || echo 'pip unavailable'"
     )
     if "pip ready" in (pip_check.logs.stdout[0].text if pip_check.logs.stdout else ""):
-        print("[Sandbox Init] pip 已就绪")
+        logger.info("pip 已就绪")
     else:
-        print("[Sandbox Init] WARNING: pip 未能安装，Python 包安装功能不可用")
+        logger.warning("pip 未能安装，Python 包安装功能不可用")
 
     # 2. 上传本地 AGENTS.md 到沙盒根目录
     if os.path.isfile(_LOCAL_AGENTS_MD):
         with open(_LOCAL_AGENTS_MD, "rb") as f:
             content = f.read()
         sandbox.files.write_file("/AGENTS.md", content)
-        print(f"[Sandbox Init] 已上传 AGENTS.md → /AGENTS.md "
-              f"({len(content)} bytes)")
+        logger.info("已上传 AGENTS.md → /AGENTS.md (%s bytes)", len(content))
     else:
-        print(f"[Sandbox Init] 本地 AGENTS.md 不存在 ({_LOCAL_AGENTS_MD})，跳过上传")
+        logger.info("本地 AGENTS.md 不存在 (%s)，跳过上传", _LOCAL_AGENTS_MD)
 
     # 3. 从 MongoDB 恢复之前持久化的文件（覆盖基线版本）
     _restore_sandbox_files(sandbox, user_id)
@@ -519,21 +513,21 @@ async def _restore_skills(user_id: str, sandbox: SandboxSync) -> None:
     if not skill_names:
         return
 
-    print(f"[Skill Restore] 从 MongoDB 发现用户 {user_id} 的 {len(skill_names)} 个 skill，开始恢复...")
+    logger.info("从 MongoDB 发现 %s 个 skill (user=%s)，开始恢复...", len(skill_names), user_id)
     restored = 0
     for skill_name in skill_names:
         try:
             zip_content = restore_skill_zip(user_id, skill_name)
             if not zip_content:
-                print(f"[Skill Restore] ✗ {skill_name}: zip 为空，跳过")
+                logger.warning("skill 恢复跳过 (zip 为空): %s", skill_name)
                 continue
             _install_skill_from_zip(sandbox, skill_name, zip_content)
             restored += 1
-            print(f"[Skill Restore] ✓ {skill_name}")
+            logger.info("skill 恢复成功: %s", skill_name)
         except Exception as e:
-            print(f"[Skill Restore] ✗ {skill_name}: {e}")
+            logger.warning("skill 恢复失败: %s: %s", skill_name, e)
 
-    print(f"[Skill Restore] 恢复完成: {restored}/{len(skill_names)}")
+    logger.info("skill 恢复完成: %s/%s", restored, len(skill_names))
 
 
 def _create_sandbox_instance() -> SandboxSync:
@@ -551,9 +545,9 @@ def _create_sandbox_instance() -> SandboxSync:
             "GO_VERSION": "1.24",
         },
     )
-    print(
-        f"[Sandbox] 创建成功: id={sandbox.id}, "
-        f"timeout={SANDBOX_TIMEOUT_HOURS}h"
+    logger.info(
+        "沙盒创建成功: %s timeout=%sh",
+        sandbox.id, SANDBOX_TIMEOUT_HOURS
     )
     return sandbox
 
@@ -577,14 +571,10 @@ async def get_or_create_sandbox(user_id: str) -> OpenSandboxBackend:
     existing_mapping = await _get_sandbox_mapping(user_id)
     if existing_mapping:
         sandbox_id = existing_mapping["sandbox_id"]
-        print(
-            f"[Redis] 发现已存在的 sandbox 映射: user_id={user_id}, "
-            f"sandbox_id={sandbox_id}, "
-            f"created_at={existing_mapping['created_at']}"
-        )
+        logger.info("发现已有 sandbox 映射: user=%s sandbox=%s", user_id, sandbox_id)
         try:
             # 尝试重连到已有的沙盒实例
-            print(f"[Redis] 正在尝试重连 sandbox: {sandbox_id} ...")
+            logger.info("正在重连 sandbox: %s", sandbox_id)
             config = _get_connection_config()
             sandbox = SandboxSync.connect(
                 sandbox_id,
@@ -601,25 +591,17 @@ async def get_or_create_sandbox(user_id: str) -> OpenSandboxBackend:
                         f"健康检查失败，exit_code={result.exit_code}"
                     )
             except Exception as health_err:
-                print(
-                    f"[Redis] sandbox 健康检查失败 (sandbox_id={sandbox_id}): {health_err}"
-                )
+                logger.warning("sandbox 健康检查失败 (%s): %s", sandbox_id, health_err)
                 sandbox.kill()
                 raise
 
             backend = OpenSandboxBackend(sandbox, user_id=user_id)
             _backends[user_id] = backend
-            print(
-                f"[Redis] ✓ 成功重连 sandbox: user_id={user_id}, "
-                f"sandbox_id={sandbox_id}"
-            )
+            logger.info("成功重连 sandbox: user=%s sandbox=%s", user_id, sandbox_id)
             return backend
 
         except Exception as e:
-            print(
-                f"[Redis] ✗ sandbox 重连失败 (sandbox_id={sandbox_id}): {e}，"
-                f"将创建新实例并更新 Redis 映射"
-            )
+            logger.warning("sandbox 重连失败 (%s): %s，将创建新实例", sandbox_id, e)
             # 删除失效的 Redis 映射（创建新沙盒后会重新写入）
             await _delete_sandbox_mapping(user_id)
 
@@ -637,10 +619,7 @@ async def get_or_create_sandbox(user_id: str) -> OpenSandboxBackend:
 
     # 4. 将映射关系持久化到 Redis
     await _store_sandbox_mapping(user_id, backend.sandbox.id)
-    print(
-        f"[Redis] sandbox 映射已存储: user_id={user_id}, "
-        f"sandbox_id={backend.sandbox.id}"
-    )
+    logger.info("sandbox 映射已存储: user=%s sandbox=%s", user_id, backend.sandbox.id)
 
     return backend
 
@@ -659,5 +638,5 @@ async def cleanup_sandbox(user_id: str):
         backend.close()
     # 清理 Redis 中的 sandbox 映射记录
     await _delete_sandbox_mapping(user_id)
-    print(f"[Redis] sandbox 映射已清理: user_id={user_id}")
+    logger.info("sandbox 映射已清理: user=%s", user_id)
 

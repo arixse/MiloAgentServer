@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -12,6 +13,8 @@ from pymongo.collection import Collection
 from auth.dependencies import get_current_user
 from auth.models import TokenResponse, UserCreate, UserLogin, UserResponse
 from auth.security import create_access_token, hash_password, verify_password
+
+logger = logging.getLogger("milo.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -31,7 +34,7 @@ def init_auth_mongo(client: MongoClient, db_name: str = "MiloAgent") -> Collecti
     _users_collection = db["users"]
     # Ensure unique index on username
     _users_collection.create_index("username", unique=True)
-    print(f"[Auth] MongoDB users collection ready — {db_name}.users")
+    logger.info("MongoDB users collection ready: %s.users", db_name)
     return _users_collection
 
 

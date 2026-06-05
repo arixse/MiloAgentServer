@@ -7,10 +7,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 import redis
 from langchain_core.runnables import RunnableConfig
+
+logger = logging.getLogger("milo.tools")
 
 from deep_agent.opensandbox_backend import _backends
 
@@ -92,9 +95,9 @@ def record_skill_install(user_id: str, skill_name: str, download_url: str) -> No
     try:
         r = _get_sync_redis()
         r.hset(_skill_key(user_id), skill_name, download_url)
-        print(f"[Skill Tracking] ✓ 已记录: {skill_name} (user={user_id})")
+        logger.info("skill 已记录: %s (user=%s)", skill_name, user_id)
     except Exception as e:
-        print(f"[Skill Tracking] ✗ 记录失败 ({skill_name}): {e}")
+        logger.warning("skill 记录失败: %s: %s", skill_name, e)
 
 
 def get_installed_skills(user_id: str) -> dict[str, str]:
@@ -110,7 +113,7 @@ def get_installed_skills(user_id: str) -> dict[str, str]:
         r = _get_sync_redis()
         return r.hgetall(_skill_key(user_id)) or {}
     except Exception as e:
-        print(f"[Skill Tracking] 读取记录失败 (user={user_id}): {e}")
+        logger.warning("skill 记录读取失败 (user=%s): %s", user_id, e)
         return {}
 
 
@@ -126,6 +129,6 @@ def delete_skill_records(user_id: str) -> None:
     try:
         r = _get_sync_redis()
         r.delete(_skill_key(user_id))
-        print(f"[Skill Tracking] 已清理记录 (user={user_id})")
+        logger.info("skill 记录已清理 (user=%s)", user_id)
     except Exception as e:
-        print(f"[Skill Tracking] 清理记录失败 (user={user_id}): {e}")
+        logger.warning("skill 记录清理失败 (user=%s): %s", user_id, e)
