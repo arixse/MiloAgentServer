@@ -23,6 +23,7 @@ from opensandbox import Sandbox, SandboxSync
 from dotenv import load_dotenv
 from opensandbox.config import ConnectionConfig, ConnectionConfigSync
 from opensandbox.models.execd import RunCommandOpts
+from pymongo import MongoClient
 
 load_dotenv()
 
@@ -45,6 +46,17 @@ REDIS_KEY_PREFIX = "milo_agent:sandbox"
 
 # 全局 Redis 客户端（延迟初始化）
 _redis_client: aioredis.Redis | None = None
+
+# MongoDB 持久化配置（复用 graph.py 的环境变量）
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "MiloAgent")
+_mongo_client: MongoClient | None = None
+
+# 需要在沙盒销毁前备份到 MongoDB 的关键文件列表
+_PERSIST_FILES = [
+    "/AGENTS.md",
+    "/memories/",  # 目录递归备份
+]
 
 # 用于缓存不同 thread_id 对应的沙盒后端实例
 _backends: dict[str, "OpenSandboxBackend"] = {}
@@ -101,8 +113,9 @@ class OpenSandboxBackend(BaseSandbox):
     通过后台线程定期调用 ``renew()`` 防止沙盒因超时而自动销毁。
     """
 
-    def __init__(self, sandbox: SandboxSync, timeout_hours: float = SANDBOX_TIMEOUT_HOURS):
+    def __init__(self, sandbox: SandboxSync, user_id: str = "", timeout_hours: float = SANDBOX_TIMEOUT_HOURS):
         self.sandbox = sandbox
+        self._user_id = user_id
         self._timeout_hours = timeout_hours
         self._renew_interval = timeout_hours * 0.8
         self._stop_renew = threading.Event()
@@ -202,7 +215,14 @@ class OpenSandboxBackend(BaseSandbox):
         return responses
 
     def close(self) -> None:
-        """Close the sandbox: stop renew loop, then kill."""
+        """Close the sandbox: backup key files to MongoDB, stop renew loop, then kill."""
+        # 1. 备份关键文件到 MongoDB（防止沙盒异常销毁导致记忆丢失）
+        if self._user_id and self.sandbox:
+            try:
+                _backup_sandbox_files(self.sandbox, self._user_id)
+            except Exception as e:
+                print(f"[Sandbox {self.sandbox.id}] 备份失败: {e}")
+        # 2. 停止续期并销毁沙盒
         self._stop_renew_loop()
         if self.sandbox:
             self.sandbox.kill()
@@ -220,8 +240,175 @@ def _get_connection_config() -> ConnectionConfigSync:
 _LOCAL_AGENTS_MD = os.path.join(os.path.dirname(__file__), "..", "..", "AGENTS.md")
 
 
-def _init_sandbox_filesystem(sandbox: SandboxSync) -> None:
-    """初始化沙盒文件系统：创建必要目录并上传 AGENTS.md。
+# ---------------------------------------------------------------------------
+# MongoDB 文件持久化 —— 沙盒销毁后保留 AGENTS.md 和 memories
+# ---------------------------------------------------------------------------
+
+def _get_mongo() -> MongoClient:
+    """获取或创建 MongoDB 客户端（单例）。"""
+    global _mongo_client
+    if _mongo_client is None:
+        _mongo_client = MongoClient(MONGO_URI)
+        print(f"[MongoDB Persist] 已连接到 {MONGO_URI}")
+    return _mongo_client
+
+
+def _persist_file_to_mongo(user_id: str, file_path: str, content: bytes) -> None:
+    """将单个文件内容持久化到 MongoDB。"""
+    mongo = _get_mongo()
+    db = mongo[MONGO_DB_NAME]
+    collection = db["sandbox_files"]
+    collection.update_one(
+        {"user_id": user_id, "path": file_path},
+        {
+            "$set": {
+                "content": content,
+                "updated_at": datetime.now(tz=timezone.utc),
+            }
+        },
+        upsert=True,
+    )
+
+
+def _restore_file_from_mongo(user_id: str, file_path: str) -> bytes | None:
+    """从 MongoDB 恢复单个文件内容，不存在则返回 None。"""
+    mongo = _get_mongo()
+    db = mongo[MONGO_DB_NAME]
+    collection = db["sandbox_files"]
+    doc = collection.find_one({"user_id": user_id, "path": file_path})
+    if doc and "content" in doc:
+        return doc["content"]
+    return None
+
+
+def _backup_sandbox_files(sandbox: SandboxSync, user_id: str) -> int:
+    """将沙盒中的关键文件备份到 MongoDB。
+
+    备份文件列表见 _PERSIST_FILES。返回成功备份的文件数。
+    """
+    count = 0
+    for file_path in _PERSIST_FILES:
+        try:
+            if file_path.endswith("/"):
+                # 目录：用 tar 打包后读取
+                result = sandbox.commands.run(
+                    f"tar -czf /tmp/_persist.tar.gz -C {file_path} . 2>/dev/null"
+                )
+                if result.exit_code == 0:
+                    content = sandbox.files.read_bytes("/tmp/_persist.tar.gz")
+                    _persist_file_to_mongo(user_id, file_path, content)
+                    count += 1
+            else:
+                content = sandbox.files.read_bytes(file_path)
+                _persist_file_to_mongo(user_id, file_path, content)
+                count += 1
+        except Exception as e:
+            print(f"[MongoDB Persist] 备份失败 {file_path}: {e}")
+    if count:
+        print(f"[MongoDB Persist] 已备份 {count} 个文件 (user_id={user_id})")
+    return count
+
+
+def _restore_sandbox_files(sandbox: SandboxSync, user_id: str) -> int:
+    """从 MongoDB 恢复关键文件到沙盒（覆盖沙盒中的默认文件）。
+
+    仅恢复 MongoDB 中存在且非空的文件。返回成功恢复的文件数。
+    """
+    count = 0
+    for file_path in _PERSIST_FILES:
+        try:
+            content = _restore_file_from_mongo(user_id, file_path)
+            if not content:
+                continue
+            if file_path.endswith("/"):
+                # 目录：解压 tar 包
+                sandbox.files.write_file("/tmp/_persist.tar.gz", content)
+                result = sandbox.commands.run(
+                    f"mkdir -p {file_path}"
+                    f" && tar -xzf /tmp/_persist.tar.gz -C {file_path}"
+                    f" && rm -f /tmp/_persist.tar.gz"
+                )
+                if result.exit_code == 0:
+                    count += 1
+                    print(f"[MongoDB Persist] 已恢复目录: {file_path}")
+            else:
+                sandbox.files.write_file(file_path, content)
+                count += 1
+                print(f"[MongoDB Persist] 已恢复文件: {file_path} ({len(content)} bytes)")
+        except Exception as e:
+            print(f"[MongoDB Persist] 恢复失败 {file_path}: {e}")
+    if count:
+        print(f"[MongoDB Persist] 已恢复 {count} 个文件 (user_id={user_id})")
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Skill zip 持久化 —— 避免重下载依赖外部 URL
+# ---------------------------------------------------------------------------
+
+def persist_skill_zip(user_id: str, skill_name: str, zip_content: bytes) -> None:
+    """将 skill 的 zip 包持久化到 MongoDB。
+
+    在沙盒意外销毁后，优先从 MongoDB 恢复，无需重新下载。
+
+    Args:
+        user_id: 用户 ID。
+        skill_name: skill 名称。
+        zip_content: skill zip 包的原始字节。
+    """
+    try:
+        _persist_file_to_mongo(user_id, f"/skills/{skill_name}.zip", zip_content)
+        print(f"[MongoDB Persist] skill zip 已存储: {skill_name} ({len(zip_content)} bytes)")
+    except Exception as e:
+        print(f"[MongoDB Persist] skill zip 存储失败 ({skill_name}): {e}")
+
+
+def restore_skill_zip(user_id: str, skill_name: str) -> bytes | None:
+    """从 MongoDB 恢复 skill 的 zip 包。
+
+    Args:
+        user_id: 用户 ID。
+        skill_name: skill 名称。
+
+    Returns:
+        zip 包字节，若未存储过则返回 None。
+    """
+    return _restore_file_from_mongo(user_id, f"/skills/{skill_name}.zip")
+
+
+def list_persisted_skills(user_id: str) -> list[str]:
+    """从 MongoDB 列出某用户已持久化的所有 skill 名称。
+
+    Args:
+        user_id: 用户 ID。
+
+    Returns:
+        skill 名称列表（无持久化记录时为空）。
+    """
+    try:
+        mongo = _get_mongo()
+        db = mongo[MONGO_DB_NAME]
+        collection = db["sandbox_files"]
+        prefix = "/skills/"
+        cursor = collection.find(
+            {"user_id": user_id, "path": {"$regex": "^/skills/.*\\.zip$"}},
+            {"path": 1},
+        )
+        names = []
+        for doc in cursor:
+            path = doc.get("path", "")
+            # 提取 skill 名称: /skills/{name}.zip → {name}
+            name = path[len(prefix):-4] if path.endswith(".zip") else path[len(prefix):]
+            if name:
+                names.append(name)
+        return names
+    except Exception as e:
+        print(f"[MongoDB Persist] 列出 skill 失败 (user={user_id}): {e}")
+        return []
+
+
+def _init_sandbox_filesystem(sandbox: SandboxSync, user_id: str) -> None:
+    """初始化沙盒文件系统：创建必要目录，上传 AGENTS.md，并从 MongoDB 恢复持久化文件。
 
     仅在全新创建的沙盒上调用，重连的沙盒无需重复初始化。
     """
@@ -251,16 +438,20 @@ def _init_sandbox_filesystem(sandbox: SandboxSync) -> None:
     else:
         print(f"[Sandbox Init] 本地 AGENTS.md 不存在 ({_LOCAL_AGENTS_MD})，跳过上传")
 
+    # 3. 从 MongoDB 恢复之前持久化的文件（覆盖基线版本）
+    _restore_sandbox_files(sandbox, user_id)
 
-def _install_skill_from_url(sandbox: SandboxSync, skill_name: str, download_url: str) -> None:
+
+def _install_skill_from_url(sandbox: SandboxSync, skill_name: str, download_url: str) -> bytes:
     """从 URL 下载 skill zip 并安装到指定的 sandbox 中。
-
-    供 skill 恢复流程使用，与 install_skill.py 中的下载安装逻辑一致。
 
     Args:
         sandbox: 目标 SandboxSync 实例。
         skill_name: skill 名称。
         download_url: skill zip 包的下载地址。
+
+    Returns:
+        下载的 zip 包原始字节（供调用方缓存到 MongoDB）。
 
     Raises:
         RuntimeError: 下载或解压失败。
@@ -282,47 +473,67 @@ def _install_skill_from_url(sandbox: SandboxSync, skill_name: str, download_url:
                         f.write(chunk)
 
         with open(local_zip, "rb") as f:
-            sandbox.files.write_file(f"/skills/{filename}", f.read())
+            zip_content = f.read()
 
-        result = sandbox.commands.run(
-            f"mkdir -p /skills/{skill_name}"
-            f" && unzip -o /skills/{filename} -d /skills/{skill_name}"
-            f" && rm -f /skills/{filename}"
-        )
-        if result.exit_code != 0:
-            stderr = result.logs.stderr[0].text if result.logs.stderr else ""
-            raise RuntimeError(f"解压失败 (exit_code={result.exit_code}): {stderr}")
+        _install_skill_from_zip(sandbox, skill_name, zip_content)
+        return zip_content
     finally:
         shutil.rmtree(local_tmpdir, ignore_errors=True)
 
 
-async def _restore_skills(user_id: str, sandbox: SandboxSync) -> None:
-    """在 sandbox 意外销毁并重建后，从 Redis 记录中恢复该用户之前安装的 skill。
+def _install_skill_from_zip(sandbox: SandboxSync, skill_name: str, zip_content: bytes) -> None:
+    """从 zip 字节直接安装 skill 到沙盒（无需下载）。
 
-    单个 skill 恢复失败不会阻塞 sandbox 创建，会打印错误日志后继续处理其余 skill。
+    Args:
+        sandbox: 目标 SandboxSync 实例。
+        skill_name: skill 名称。
+        zip_content: skill zip 包的原始字节。
+
+    Raises:
+        RuntimeError: 解压失败。
+    """
+    remote_zip = f"/skills/{skill_name}.zip"
+    sandbox.files.write_file(remote_zip, zip_content)
+
+    result = sandbox.commands.run(
+        f"mkdir -p /skills/{skill_name}"
+        f" && unzip -o {remote_zip} -d /skills/{skill_name}"
+        f" && rm -f {remote_zip}"
+    )
+    if result.exit_code != 0:
+        stderr = result.logs.stderr[0].text if result.logs.stderr else ""
+        raise RuntimeError(f"解压失败 (exit_code={result.exit_code}): {stderr}")
+
+
+async def _restore_skills(user_id: str, sandbox: SandboxSync) -> None:
+    """在 sandbox 意外销毁并重建后，从 MongoDB 恢复该用户之前安装的 skill。
+
+    从 MongoDB sandbox_files 集合读取缓存的 zip 包直接解压，无需联网。
+    单个 skill 恢复失败不会阻塞 sandbox 创建。
 
     Args:
         user_id: 用户 ID（skill 按 user 维度存储，跨会话保留）。
         sandbox: 新创建的 SandboxSync 实例。
     """
-    # lazy import 避免与 sandbox_utils 之间的循环依赖
-    from tools.sandbox_utils import get_installed_skills
-
-    skills = get_installed_skills(user_id)
-    if not skills:
+    skill_names = list_persisted_skills(user_id)
+    if not skill_names:
         return
 
-    print(f"[Skill Restore] 发现用户 {user_id} 的 {len(skills)} 个已安装 skill，开始恢复...")
+    print(f"[Skill Restore] 从 MongoDB 发现用户 {user_id} 的 {len(skill_names)} 个 skill，开始恢复...")
     restored = 0
-    for skill_name, download_url in skills.items():
+    for skill_name in skill_names:
         try:
-            _install_skill_from_url(sandbox, skill_name, download_url)
+            zip_content = restore_skill_zip(user_id, skill_name)
+            if not zip_content:
+                print(f"[Skill Restore] ✗ {skill_name}: zip 为空，跳过")
+                continue
+            _install_skill_from_zip(sandbox, skill_name, zip_content)
             restored += 1
             print(f"[Skill Restore] ✓ {skill_name}")
         except Exception as e:
             print(f"[Skill Restore] ✗ {skill_name}: {e}")
 
-    print(f"[Skill Restore] 恢复完成: {restored}/{len(skills)}")
+    print(f"[Skill Restore] 恢复完成: {restored}/{len(skill_names)}")
 
 
 def _create_sandbox_instance() -> SandboxSync:
@@ -397,7 +608,7 @@ async def get_or_create_sandbox(thread_id: str, user_id: str) -> OpenSandboxBack
                 sandbox.kill()
                 raise
 
-            backend = OpenSandboxBackend(sandbox)
+            backend = OpenSandboxBackend(sandbox, user_id=user_id)
             _backends[thread_id] = backend
             print(
                 f"[Redis] ✓ 成功重连 sandbox: thread_id={thread_id}, "
@@ -415,10 +626,10 @@ async def get_or_create_sandbox(thread_id: str, user_id: str) -> OpenSandboxBack
 
     # 3. 创建新的沙盒实例
     sandbox = _create_sandbox_instance()
-    backend = OpenSandboxBackend(sandbox)
+    backend = OpenSandboxBackend(sandbox, user_id=user_id)
 
     # 初始化沙盒文件系统（目录 + AGENTS.md，仅新创建的沙盒）
-    _init_sandbox_filesystem(sandbox)
+    _init_sandbox_filesystem(sandbox, user_id)
 
     # 从 Redis 记录中恢复该用户之前安装的 skill（sandbox 意外销毁后的自动恢复）
     await _restore_skills(user_id, sandbox)

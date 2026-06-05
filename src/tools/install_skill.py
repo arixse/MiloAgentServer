@@ -13,7 +13,8 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from playwright.sync_api import sync_playwright
 
-from tools.sandbox_utils import get_sandbox_sync, record_skill_install
+from deep_agent.opensandbox_backend import persist_skill_zip
+from tools.sandbox_utils import get_sandbox_sync
 
 load_dotenv()
 
@@ -80,11 +81,12 @@ def _download_and_install_skill(download_url: str, config: RunnableConfig) -> st
         # 3. 获取已创建的 OpenSandbox sandbox
         sandbox = get_sandbox_sync(config)
 
-        # 4. 确保 sandbox 中 /skills/ 目录存在，再上传 zip
+        # 4. 读取 zip 内容并上传到沙盒
+        with open(local_zip, "rb") as f:
+            zip_content = f.read()
         sandbox.commands.run("mkdir -p /skills/")
         remote_zip = f"/skills/{filename}"
-        with open(local_zip, "rb") as f:
-            sandbox.files.write_file(remote_zip, f.read())
+        sandbox.files.write_file(remote_zip, zip_content)
 
         # 5. 解压并清理临时文件
         result = sandbox.commands.run(
@@ -96,9 +98,9 @@ def _download_and_install_skill(download_url: str, config: RunnableConfig) -> st
             stderr = result.logs.stderr[0].text if result.logs.stderr else ""
             return f"解压失败 (exit_code={result.exit_code}): {stderr}"
 
-        # 记录安装到 Redis（按 user 维度），用于 sandbox 意外销毁后的自动恢复
+        # 6. 持久化 skill zip 到 MongoDB（沙盒重建时自动恢复）
         user_id = config["configurable"]["user_id"]
-        record_skill_install(user_id, skill_name, download_url)
+        persist_skill_zip(user_id, skill_name, zip_content)
 
         return f"skill 安装成功，已解压至 sandbox /skills/{skill_name}/ 目录（来源: {download_url}）"
 
