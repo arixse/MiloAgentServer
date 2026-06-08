@@ -8,18 +8,17 @@
 # ---------------------------------------------------------------------------
 # Stage 1 — 前端构建
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS frontend-builder
+FROM oven/bun:1-alpine AS frontend-builder
 
 WORKDIR /app/client
 
-# 复制 package.json 并安装依赖
-# 注意：删除 lock 文件强制重解析，避免 Windows→Linux 平台原生绑定缺失
+# 复制 package.json 并安装依赖（bun 跨平台一致性更好）
 COPY client/package.json ./
-RUN npm install
+RUN bun install
 
 # 复制前端源码并构建
 COPY client/ ./
-RUN npm run build
+RUN bun run build
 
 # ---------------------------------------------------------------------------
 # Stage 2 — 后端生产镜像
