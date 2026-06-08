@@ -1,0 +1,12 @@
+# ===========================================================================
+# MiloAgent — 本地开发覆盖
+# ===========================================================================
+# 使用:  docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# ===========================================================================
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: milo-agent:latest

@@ -22,10 +22,7 @@ services:
   # MiloAgent — 主应用
   # -------------------------------------------------------------------------
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: milo-agent:latest
+    image: ${DOCKER_IMAGE:-arixse/milo-agent}:latest
     container_name: milo-agent-app
     restart: unless-stopped
     ports:
