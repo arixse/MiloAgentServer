@@ -41,7 +41,7 @@ export function ChatInput({ onSubmit, onStop, isLoading, disabled }: ChatInputPr
 
   return (
     <div className="border-t border-gray-200 bg-white px-4 py-3">
-      <div className="max-w-3xl mx-auto flex items-end gap-2">
+      <div className="max-w-3xl mx-auto flex items-end gap-2"  style={{alignItems: 'center'}}>
         <div className="flex-1 relative">
           <textarea
             ref={textareaRef}
@@ -66,7 +66,7 @@ export function ChatInput({ onSubmit, onStop, isLoading, disabled }: ChatInputPr
 
         {isLoading ? (
           <Button variant="danger" size="sm" onClick={onStop} className="shrink-0 px-3">
-            <Square className="w-3.5 h-3.5" />
+            <Square className="w-3.5 h-6" />
           </Button>
         ) : (
           <Button
@@ -75,7 +75,7 @@ export function ChatInput({ onSubmit, onStop, isLoading, disabled }: ChatInputPr
             size="sm"
             className="shrink-0 px-3"
           >
-            <Send className="w-3.5 h-3.5" />
+            <Send className="w-3.5 h-6"/>
           </Button>
         )}
       </div>
