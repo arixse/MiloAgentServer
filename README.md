@@ -37,7 +37,6 @@ Your personal AI assistant. Just chat with it to search for information, process
 | Frontend | React 19 + TypeScript + Tailwind CSS 4 | Chat UI with Markdown, tool call cards, streaming |
 | API | FastAPI + Uvicorn | REST endpoints, SSE streaming, JWT auth |
 | Agent | LangGraph + DeepAgents | Multi-step reasoning, tool orchestration, subagents |
-| LLM | DeepSeek (OpenAI-compatible) | Model provider (configurable) |
 | Checkpoint | MongoDB | Conversation history, agent state persistence |
 | Memory | MongoDB Store | Long-term user preferences at `/memories/` |
 | Metadata | Redis | Thread list, sandbox mappings, skill records |

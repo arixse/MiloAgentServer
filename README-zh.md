@@ -37,7 +37,6 @@
 | 前端 | React 19 + TypeScript + Tailwind CSS 4 | 聊天界面，Markdown 渲染，工具调用卡片，流式输出 |
 | API | FastAPI + Uvicorn | REST 接口，SSE 流式，JWT 认证 |
 | Agent | LangGraph + DeepAgents | 多步骤推理，工具编排，子代理 |
-| 模型 | DeepSeek (兼容 OpenAI) | 可替换为任意兼容 OpenAI 的模型 |
 | Checkpoint | MongoDB | 对话历史，Agent 状态持久化 |
 | 记忆 | MongoDB Store | 用户长期偏好，存储在 `/memories/` |
 | 元数据 | Redis | 线程列表，sandbox 映射，Skill 记录 |
