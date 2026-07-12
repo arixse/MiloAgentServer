@@ -334,6 +334,12 @@ async def download_file(
             },
         )
     except Exception as e:
+        err_msg = str(e)
+        if "FILE_NOT_FOUND" in err_msg or "no such file" in err_msg:
+            raise HTTPException(
+                status_code=404,
+                detail=f"沙盒中未找到文件: {file_path}。文件可能已被删除或沙盒已重建。",
+            )
         raise HTTPException(status_code=500, detail=f"文件下载失败: {e}")
 
 

@@ -196,16 +196,28 @@ def generate_download_url_from_sandbox(file_path: str, config: RunnableConfig) -
     Returns a URL pointing to the MiloAgent file download API,
     which reads the file directly from the sandbox via OpenSandbox API.
 
-    The URL includes the user's JWT token as a query parameter so the
-    download works when opened directly in the browser (no Authorization header).
+    Verifies the file exists before returning the URL.
 
     Args:
         file_path: Absolute path to the file in the sandbox, e.g. "/tmp/report.pdf".
         config: LangChain runtime config (auto-injected).
     Returns:
-        Download URL for the file.
+        Download URL for the file, or error message if file not found.
     """
     import urllib.parse
+
+    try:
+        sandbox = get_sandbox_sync(config)
+        # Verify file exists by listing or attempting a stat
+        check = sandbox.commands.run(f"test -f {file_path} && echo 'exists' || echo 'missing'")
+        stdout = check.logs.stdout[0].text if check.logs.stdout else ""
+        if "missing" in stdout:
+            # Try to list /tmp contents to help debugging
+            ls = sandbox.commands.run(f"ls -la {file_path} 2>&1 || ls -la /tmp/ 2>&1 | head -20")
+            ls_out = ls.logs.stdout[0].text if ls.logs.stdout else ""
+            return f"文件不存在: {file_path}\n\n/tmp/ 目录内容:\n{ls_out}"
+    except Exception as e:
+        return f"无法验证文件: {e}"
 
     cfg = config.get("configurable", {})
     thread_id = cfg.get("thread_id", "")
