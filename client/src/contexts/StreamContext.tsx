@@ -77,11 +77,14 @@ function mapStateMessages(rawMessages: unknown[]): ChatMessage[] {
 interface StreamState {
   messages: ChatMessage[];
   isLoading: boolean;
+  isLoadingMessages: boolean;
   threadId: string | null;
 }
 
 type StreamAction =
+  | { type: 'LOAD_MESSAGES_START' }
   | { type: 'LOAD_MESSAGES'; payload: ChatMessage[] }
+  | { type: 'LOAD_MESSAGES_END' }
   | { type: 'ADD_USER_MESSAGE'; payload: ChatMessage }
   | { type: 'START_STREAMING'; payload: string }
   | { type: 'APPEND_CONTENT'; payload: string }
@@ -94,8 +97,13 @@ type StreamAction =
 
 function streamReducer(state: StreamState, action: StreamAction): StreamState {
   switch (action.type) {
+    case 'LOAD_MESSAGES_START':
+      return { ...state, isLoadingMessages: true };
     case 'LOAD_MESSAGES':
-      return { ...state, messages: action.payload };
+      return { ...state, messages: action.payload, isLoadingMessages: false };
+    case 'LOAD_MESSAGES_END':
+      // Fallback: stop loading spinner even if no messages were loaded
+      return { ...state, isLoadingMessages: false };
     case 'ADD_USER_MESSAGE':
       return { ...state, messages: [...state.messages, action.payload] };
     case 'START_STREAMING': {
@@ -245,6 +253,7 @@ function streamReducer(state: StreamState, action: StreamAction): StreamState {
 interface StreamContextValue {
   messages: ChatMessage[];
   isLoading: boolean;
+  isLoadingMessages: boolean;
   loadMessages: (threadId: string) => Promise<void>;
   submit: (text: string, threadId: string) => Promise<void>;
   stop: () => void;
@@ -256,6 +265,7 @@ export function StreamProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(streamReducer, {
     messages: [],
     isLoading: false,
+    isLoadingMessages: false,
     threadId: null,
   });
   const abortRef = useRef<AbortController | null>(null);
@@ -263,13 +273,17 @@ export function StreamProvider({ children }: { children: ReactNode }) {
   const loadMessages = useCallback(async (threadId: string) => {
     // Clear immediately to prevent flash of old thread's messages
     dispatch({ type: 'CLEAR_MESSAGES' });
+    dispatch({ type: 'LOAD_MESSAGES_START' });
     try {
       const threadState = await threadsApi.getThreadState(threadId);
       const rawMessages = (threadState.values?.messages as unknown[]) || [];
       if (rawMessages.length > 0) {
         dispatch({ type: 'LOAD_MESSAGES', payload: mapStateMessages(rawMessages) });
+      } else {
+        dispatch({ type: 'LOAD_MESSAGES_END' });
       }
     } catch (err: unknown) {
+      dispatch({ type: 'LOAD_MESSAGES_END' });
       const msg = err instanceof Error ? err.message : '未知错误';
       toast.error('加载消息失败', { description: msg });
     }
@@ -366,7 +380,7 @@ export function StreamProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <StreamContext.Provider value={{ messages: state.messages, isLoading: state.isLoading, loadMessages, submit, stop }}>
+    <StreamContext.Provider value={{ messages: state.messages, isLoading: state.isLoading, isLoadingMessages: state.isLoadingMessages, loadMessages, submit, stop }}>
       {children}
     </StreamContext.Provider>
   );

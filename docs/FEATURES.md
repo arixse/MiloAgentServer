@@ -38,7 +38,7 @@ MiloAgent 是一个基于 LangGraph / DeepAgents 框架的深度 AI Agent 服务
                      ├──────────────────────────────────────┤
                      │  基础设施                            │
                      │  ├─ MongoDB (checkpoint/store/线程)   │
-                     │  ├─ Redis (sandbox 映射/skill 记录)  │
+
                      │  └─ MinIO (文件存储)                  │
                      └──────────────────────────────────────┘
 ```
@@ -266,14 +266,14 @@ curl -X POST "http://localhost:8000/api/threads/$thread_id/runs/stream" \
 | 文件读写 | 上传/下载沙盒内文件 |
 | 多语言 | Python 3.11 / Node.js 20 / Java 17 / Go 1.24 |
 | 自动续期 | 后台线程每 19.2h 自动续期（80% 存活时间） |
-| 崩溃恢复 | 沙盒意外销毁后，从 Redis 映射重连或创建新实例，从 MongoDB 恢复文件 |
+| 崩溃恢复 | 沙盒意外销毁后，从 MongoDB 映射重连或创建新实例 |
 
 ### 预期效果
 
 | 场景 | 预期行为 |
 |------|----------|
 | 首次创建沙盒 | 约 30-60s（含镜像拉取），创建后初始化 pip/目录/AGENTS.md |
-| 沙盒重连 | 服务重启后通过 Redis 映射重连已有沙盒，< 10s |
+| 沙盒重连 | 服务重启后通过 MongoDB 映射重连已有沙盒，< 10s |
 | 命令执行 | 超时自动中断，返回 exit_code 和输出 |
 | 24h 自动续期 | 沙盒不会因超时被销毁 |
 | pip 安装 | 自动检测并安装 pip（支持 apt-get / apk） |
@@ -321,7 +321,7 @@ curl -X POST "http://localhost:8000/api/threads/$thread_id/runs/stream" \
 
 ```
 下载 zip → 解析 SKILL.md 获取 skill name → 上传到沙盒解压
-  → 持久化 zip 到 MongoDB → 记录到 Redis
+  → 持久化 zip 到 MongoDB
   → 沙盒重建时自动从 MongoDB 恢复
 ```
 
@@ -525,7 +525,7 @@ curl -X POST "http://localhost:8000/api/threads/$thread_id/runs/stream" \
 | 服务 | 镜像 | 端口 | 职责 |
 |------|------|------|------|
 | app | arixse/milo-agent | 8000 | FastAPI 应用（含前端静态资源） |
-| redis | redis:7-alpine | 6379 | Sandbox 映射 & Skill 记录 |
+
 | mongodb | mongo:7 | 27017 | Checkpoint / Store / 线程元数据 |
 
 ### 预期效果
@@ -534,8 +534,8 @@ curl -X POST "http://localhost:8000/api/threads/$thread_id/runs/stream" \
 |------|----------|
 | 生产部署 | `docker compose up -d` 一键启动，服务自愈 (restart: unless-stopped) |
 | 开发部署 | `docker compose -f docker-compose.dev.yml up -d --build` 本地构建 |
-| 健康检查 | Redis/MongoDB 健康检查通过后 app 才启动 |
-| 数据持久化 | Redis 和 MongoDB 数据挂载到 named volumes，重启不丢失 |
+| 健康检查 | MongoDB 健康检查通过后 app 才启动 |
+| 数据持久化 | MongoDB 数据挂载到 named volumes，重启不丢失 |
 
 ### 验证方法
 
@@ -570,9 +570,6 @@ docker compose logs -f app
 | `OPENSANDBOX_SERVER_URL` | ✅ | `http://182.254.183.29:8080` | 沙盒服务地址 |
 | `OPENSANDBOX_API_KEY` | ✅ | — | 沙盒 API 密钥 |
 | `SANDBOX_TIMEOUT_HOURS` | — | `24` | 沙盒存活时间 |
-| `REDIS_HOST` | — | `localhost` | Redis 主机 |
-| `REDIS_PORT` | — | `6379` | Redis 端口 |
-| `REDIS_PASSWORD` | — | — | Redis 密码 |
 | `MONGO_URI` | — | `mongodb://localhost:27017` | MongoDB 连接 |
 | `MONGO_DB_NAME` | — | `MiloAgent` | 数据库名 |
 | `JWT_SECRET_KEY` | ✅ | — | JWT 签名密钥 |

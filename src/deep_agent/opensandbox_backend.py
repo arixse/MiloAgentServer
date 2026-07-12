@@ -5,16 +5,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
 from datetime import datetime, timedelta, timezone
 
-import asyncio
-import redis.asyncio as aioredis
-
-logger = logging.getLogger("milo.sandbox")
 from deepagents.backends.protocol import (
     ExecuteResponse,
     FileDownloadResponse,
@@ -28,6 +23,8 @@ from opensandbox.config import ConnectionConfig, ConnectionConfigSync
 from opensandbox.models.execd import RunCommandOpts
 from pymongo import MongoClient
 
+logger = logging.getLogger("milo.sandbox")
+
 load_dotenv()
 
 # 默认的沙盒镜像（OpenSandbox 官方提供的代码解释器镜像）
@@ -40,16 +37,6 @@ DEFAULT_SANDBOX_IMAGE = "opensandbox/code-interpreter:v1.0.1"
 SANDBOX_TIMEOUT_HOURS = float(os.getenv("SANDBOX_TIMEOUT_HOURS", "24"))
 # 续期间隔 = 存活时间的 80%，确保在过期前提前续期
 SANDBOX_RENEW_HOURS = SANDBOX_TIMEOUT_HOURS * 0.8
-
-# Redis 连接配置
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
-REDIS_KEY_PREFIX = "milo_agent:sandbox"
-
-# 全局 Redis 客户端（延迟初始化）
-_redis_client: aioredis.Redis | None = None
 
 # MongoDB 持久化配置（复用 graph.py 的环境变量）
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
@@ -68,49 +55,45 @@ _PERSIST_FILES = [
 _backends: dict[str, "OpenSandboxBackend"] = {}
 
 
-async def _get_redis() -> aioredis.Redis:
-    """获取或创建 Redis 异步客户端（单例模式）。"""
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = aioredis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB,
-            password=REDIS_PASSWORD or None,
-            decode_responses=True,
-        )
-    return _redis_client
-
-
-def _redis_key(user_id: str) -> str:
-    """生成 Redis 键名（按 user_id 索引）。"""
-    return f"{REDIS_KEY_PREFIX}:{user_id}"
+def _sandbox_mapping_collection():
+    """获取 sandbox 映射的 MongoDB collection。"""
+    mongo = _get_mongo()
+    return mongo[MONGO_DB_NAME]["sandbox_mappings"]
 
 
 async def _store_sandbox_mapping(user_id: str, sandbox_id: str) -> None:
-    """将 user_id → sandbox 的映射关系存储到 Redis。"""
-    r = await _get_redis()
-    mapping = {
-        "sandbox_id": sandbox_id,
-        "created_at": datetime.now(tz=timezone.utc).isoformat(),
-        "user_id": user_id,
-    }
-    await r.set(_redis_key(user_id), json.dumps(mapping))
+    """将 user_id → sandbox 的映射关系存储到 MongoDB。"""
+    collection = _sandbox_mapping_collection()
+    collection.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "sandbox_id": sandbox_id,
+            "created_at": datetime.now(tz=timezone.utc).isoformat(),
+            "user_id": user_id,
+        }},
+        upsert=True,
+    )
+    logger.debug("sandbox 映射已存储: user=%s sandbox=%s", user_id, sandbox_id)
 
 
 async def _get_sandbox_mapping(user_id: str) -> dict | None:
-    """从 Redis 查询 user_id 对应的 sandbox 映射。"""
-    r = await _get_redis()
-    data = await r.get(_redis_key(user_id))
-    if data:
-        return json.loads(data)
+    """从 MongoDB 查询 user_id 对应的 sandbox 映射。"""
+    collection = _sandbox_mapping_collection()
+    doc = collection.find_one({"user_id": user_id})
+    if doc:
+        return {
+            "sandbox_id": doc["sandbox_id"],
+            "created_at": doc.get("created_at", ""),
+            "user_id": doc.get("user_id", user_id),
+        }
     return None
 
 
 async def _delete_sandbox_mapping(user_id: str) -> None:
-    """从 Redis 删除 user_id 对应的 sandbox 映射。"""
-    r = await _get_redis()
-    await r.delete(_redis_key(user_id))
+    """从 MongoDB 删除 user_id 对应的 sandbox 映射。"""
+    collection = _sandbox_mapping_collection()
+    collection.delete_one({"user_id": user_id})
+    logger.debug("sandbox 映射已删除: user=%s", user_id)
 
 
 class OpenSandboxBackend(BaseSandbox):
@@ -611,8 +594,8 @@ async def get_or_create_sandbox(user_id: str) -> OpenSandboxBackend:
 
     一个用户一个沙盒，所有线程共享。查找顺序：
     1. 内存缓存（当前进程）
-    2. Redis 映射 → 尝试重连已有沙盒
-    3. 以上均不可用 → 创建新沙盒并更新 Redis 映射
+    2. MongoDB 映射 → 尝试重连已有沙盒
+    3. 以上均不可用 → 创建新沙盒并更新 MongoDB 映射
 
     Args:
         user_id: 用户 ID。
@@ -621,7 +604,7 @@ async def get_or_create_sandbox(user_id: str) -> OpenSandboxBackend:
     if backend := _backends.get(user_id):
         return backend
 
-    # 2. 查询 Redis 中的历史映射，尝试重连已有沙盒
+    # 2. 查询 MongoDB 中的历史映射，尝试重连已有沙盒
     existing_mapping = await _get_sandbox_mapping(user_id)
     if existing_mapping:
         sandbox_id = existing_mapping["sandbox_id"]
@@ -656,7 +639,7 @@ async def get_or_create_sandbox(user_id: str) -> OpenSandboxBackend:
 
         except Exception as e:
             logger.warning("sandbox 重连失败 (%s): %s，将创建新实例", sandbox_id, e)
-            # 删除失效的 Redis 映射（创建新沙盒后会重新写入）
+            # 删除失效的映射（创建新沙盒后会重新写入）
             await _delete_sandbox_mapping(user_id)
 
     # 3. 创建新的沙盒实例
@@ -671,7 +654,7 @@ async def get_or_create_sandbox(user_id: str) -> OpenSandboxBackend:
 
     _backends[user_id] = backend
 
-    # 4. 将映射关系持久化到 Redis
+    # 4. 将映射关系持久化到 MongoDB
     await _store_sandbox_mapping(user_id, backend.sandbox.id)
     logger.info("sandbox 映射已存储: user=%s sandbox=%s", user_id, backend.sandbox.id)
 
@@ -690,7 +673,7 @@ async def cleanup_sandbox(user_id: str):
     """
     if backend := _backends.pop(user_id, None):
         backend.close()
-    # 清理 Redis 中的 sandbox 映射记录
+    # 清理 MongoDB 中的 sandbox 映射记录
     await _delete_sandbox_mapping(user_id)
     logger.info("sandbox 映射已清理: user=%s", user_id)
 

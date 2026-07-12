@@ -8,8 +8,7 @@
 #
 # 服务说明:
 #   app       — MiloAgent FastAPI 应用 (Python 3.11 + LangGraph)
-#   redis     — sandbox 映射 & skill 安装记录持久化
-#   mongodb   — LangGraph checkpoint & store 持久化
+#   mongodb   — LangGraph checkpoint & store & sandbox 映射持久化
 #
 # 外部依赖（不在本 compose 内管理）:
 #   OpenSandbox — 代码执行沙盒，地址由 OPENSANDBOX_SERVER_URL 指定
@@ -29,40 +28,16 @@ services:
       - .env
     environment:
       # ---- 容器内服务地址（覆盖 .env 中的 localhost） ----
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
       MONGO_URI: mongodb://mongodb:27017
       MONGO_DB_NAME: MiloAgent
     depends_on:
-      redis:
-        condition: service_healthy
       mongodb:
         condition: service_healthy
     networks:
       - milo-net
 
   # -------------------------------------------------------------------------
-  # Redis — sandbox 映射 & skill 记录
-  # -------------------------------------------------------------------------
-  redis:
-    image: redis:7-alpine
-    container_name: milo-agent-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-    networks:
-      - milo-net
-
-  # -------------------------------------------------------------------------
-  # MongoDB — LangGraph 持久化 (checkpoint + store)
+  # MongoDB — LangGraph 持久化 (checkpoint + store + sandbox 映射)
   # -------------------------------------------------------------------------
   mongodb:
     image: mongo:7
@@ -85,8 +60,6 @@ services:
 # Volumes
 # ---------------------------------------------------------------------------
 volumes:
-  redis-data:
-    driver: local
   mongo-data:
     driver: local
 
