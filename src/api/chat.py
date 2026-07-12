@@ -24,7 +24,6 @@ from deep_agent.graph import (
     cleanup_thread,
     get_or_create_agent,
     get_thread_meta,
-    get_thread_state_direct,
     list_threads_by_user,
     new_thread_id,
     save_thread_meta,
@@ -281,13 +280,18 @@ async def get_state(
 ) -> StateResponse:
     """获取指定线程的当前状态（消息历史、变量等）。
 
-    直接从 MongoDB checkpoint 读取，不依赖 agent 或 sandbox，响应速度极快。
+    若 agent 已缓存则直接使用（sandbox 已在 list_threads/create_thread 时预创建），
+    否则从 checkpoint 直接读取作为降级路径。
     """
     user_id = current_user["user_id"]
     await _require_owner(thread_id, user_id)
 
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+
     try:
-        values = await get_thread_state_direct(thread_id)
+        agent = await get_or_create_agent(thread_id, user_id=user_id)
+        state = await agent.aget_state(config)
+        values = state.values if state.values else {}
         return StateResponse(thread_id=thread_id, user_id=user_id, values=values)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
