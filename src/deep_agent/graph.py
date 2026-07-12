@@ -49,6 +49,18 @@ MONGO_PASSWORD = os.getenv("MONGO_PASSWORD", "")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "MiloAgent")
 
 _mongo_client: MongoClient | None = None
+_checkpointer: MongoDBSaver | None = None
+
+
+def _get_checkpointer() -> MongoDBSaver:
+    """获取缓存的 MongoDBSaver 实例（用于无需 agent 的只读操作）。"""
+    global _checkpointer
+    if _checkpointer is None:
+        _checkpointer = MongoDBSaver(
+            _get_mongo_client(),
+            db_name=f"{MONGO_DB_NAME}_checkpoints",
+        )
+    return _checkpointer
 
 
 def _get_mongo_client() -> MongoClient:
@@ -252,6 +264,23 @@ async def get_or_create_agent(thread_id: str, user_id: str):
         agent = await _build_agent(user_id)
         _agent_cache[thread_id] = agent
         return agent
+
+
+async def get_thread_state_direct(thread_id: str) -> dict:
+    """直接从 MongoDB checkpoint 读取线程状态，不依赖 agent 或 sandbox。
+
+    绕过了 get_or_create_agent → _build_agent → sandbox 创建流程，
+    用于只读场景（如 /threads/{id}/state），避免等待 sandbox 就绪。
+
+    Returns:
+        checkpoint channel_values，无记录时返回空 dict。
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    checkpointer = _get_checkpointer()
+    tuple_ = await checkpointer.aget_tuple(config)
+    if tuple_ and tuple_.checkpoint:
+        return tuple_.checkpoint.get("channel_values", {}) or {}
+    return {}
 
 
 async def cleanup_thread(thread_id: str) -> bool:
