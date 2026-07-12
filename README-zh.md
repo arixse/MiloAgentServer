@@ -32,15 +32,15 @@
                          └─────────┘             └─────────────┘       └────────────┘
 ```
 
-| 层 | 技术 | 用途 |
-|-------|-----------|---------|
-| 前端 | React 19 + TypeScript + Tailwind CSS 4 | 聊天界面，Markdown 渲染，工具调用卡片，流式输出 |
-| API | FastAPI + Uvicorn | REST 接口，SSE 流式，JWT 认证 |
-| Agent | LangGraph + DeepAgents | 多步骤推理，工具编排，子代理 |
-| Checkpoint | MongoDB | 对话历史，Agent 状态持久化 |
-| 记忆 | MongoDB Store | 用户长期偏好，存储在 `/memories/` |
-| 元数据 | Redis | 线程列表，sandbox 映射，Skill 记录 |
-| 沙盒 | OpenSandbox | 隔离的命令执行、文件读写、代码运行 |
+| 层         | 技术                                   | 用途                                            |
+| ---------- | -------------------------------------- | ----------------------------------------------- |
+| 前端       | React 19 + TypeScript + Tailwind CSS 4 | 聊天界面，Markdown 渲染，工具调用卡片，流式输出 |
+| API        | FastAPI + Uvicorn                      | REST 接口，SSE 流式，JWT 认证                   |
+| Agent      | LangGraph + DeepAgents                 | 多步骤推理，工具编排，子代理                    |
+| Checkpoint | MongoDB                                | 对话历史，Agent 状态持久化                      |
+| 记忆       | MongoDB Store                          | 用户长期偏好，存储在`/memories/`              |
+| 元数据     | Redis                                  | 线程列表，sandbox 映射，Skill 记录              |
+| 沙盒       | OpenSandbox                            | 隔离的命令执行、文件读写、代码运行              |
 
 ## 快速开始
 
@@ -84,53 +84,53 @@ Vite 开发服务器将 `/api` 请求代理到 `localhost:8000`，前端热更�
 
 ### 认证
 
-| 方法 | 路径 | 认证 | 说明 |
-|--------|------|------|-------------|
-| `POST` | `/auth/register` | 否 | 注册新用户 |
-| `POST` | `/auth/login` | 否 | 登录，返回 JWT |
-| `GET` | `/auth/me` | 是 | 获取当前用户信息 |
+| 方法     | 路径               | 认证 | 说明             |
+| -------- | ------------------ | ---- | ---------------- |
+| `POST` | `/auth/register` | 否   | 注册新用户       |
+| `POST` | `/auth/login`    | 否   | 登录，返回 JWT   |
+| `GET`  | `/auth/me`       | 是   | 获取当前用户信息 |
 
 ### 线程
 
-| 方法 | 路径 | 认证 | 说明 |
-|--------|------|------|-------------|
-| `POST` | `/threads` | 是 | 创建新线程 |
-| `GET` | `/threads` | 是 | 列出用户线程 |
-| `GET` | `/threads/{id}` | 是 | 查询线程元数据 |
-| `DELETE` | `/threads/{id}` | 是 | 删除线程及对应沙盒 |
+| 方法       | 路径              | 认证 | 说明               |
+| ---------- | ----------------- | ---- | ------------------ |
+| `POST`   | `/threads`      | 是   | 创建新线程         |
+| `GET`    | `/threads`      | 是   | 列出用户线程       |
+| `GET`    | `/threads/{id}` | 是   | 查询线程元数据     |
+| `DELETE` | `/threads/{id}` | 是   | 删除线程及对应沙盒 |
 
 ### 运行
 
-| 方法 | 路径 | 认证 | 说明 |
-|--------|------|------|-------------|
-| `POST` | `/threads/{id}/runs` | 是 | 非流式运行 |
-| `POST` | `/threads/{id}/runs/stream` | 是 | **SSE 流式运行** |
-| `GET` | `/threads/{id}/state` | 是 | 读取线程状态/消息历史 |
+| 方法     | 路径                          | 认证 | 说明                   |
+| -------- | ----------------------------- | ---- | ---------------------- |
+| `POST` | `/threads/{id}/runs`        | 是   | 非流式运行             |
+| `POST` | `/threads/{id}/runs/stream` | 是   | **SSE 流式运行** |
+| `GET`  | `/threads/{id}/state`       | 是   | 读取线程状态/消息历史  |
 
 ### SSE 流事件
 
 流式端点发送以下事件：
 
-| `type` | 内容 | 说明 |
-|--------|---------|-------------|
-| `message` | `content`, `tool_calls`, `tool_call_chunks` | AI 文本增量 和/或 工具调用信息 |
-| `tool_result` | `tool_call_id`, `name`, `content` | 工具执行结果 |
-| `done` | `thread_id` | 流正常结束 |
-| `error` | `detail` | 错误信息 |
+| `type`        | 内容                                              | 说明                           |
+| --------------- | ------------------------------------------------- | ------------------------------ |
+| `message`     | `content`, `tool_calls`, `tool_call_chunks` | AI 文本增量 和/或 工具调用信息 |
+| `tool_result` | `tool_call_id`, `name`, `content`           | 工具执行结果                   |
+| `done`        | `thread_id`                                     | 流正常结束                     |
+| `error`       | `detail`                                        | 错误信息                       |
 
 ## 内置工具
 
 Agent 内置了可在沙盒中使用的工具集：
 
-| 工具 | 说明 |
-|------|-------------|
-| `search` | 通过 Tavily 进行网络搜索 |
-| `read_file` | 读取沙盒文件（支持 PDF、Markdown、DOCX、XLSX、PPTX、TXT） |
-| `save_to_markdown` | 将文本保存为 Markdown 文件 |
-| `save_to_pdf` | 将文本保存为 PDF 文件 |
-| `generate_download_url` | 生成沙盒文件的签名下载链接 |
-| `install_skill` | 从 URL 下载并安装 Skill |
-| `utc_now` | 获取当前 UTC 时间戳 |
+| 工具                      | 说明                                                      |
+| ------------------------- | --------------------------------------------------------- |
+| `search`                | 通过 Tavily 进行网络搜索                                  |
+| `read_file`             | 读取沙盒文件（支持 PDF、Markdown、DOCX、XLSX、PPTX、TXT） |
+| `save_to_markdown`      | 将文本保存为 Markdown 文件                                |
+| `save_to_pdf`           | 将文本保存为 PDF 文件                                     |
+| `generate_download_url` | 生成沙盒文件的签名下载链接                                |
+| `install_skill`         | 从 URL 下载并安装 Skill                                   |
+| `utc_now`               | 获取当前 UTC 时间戳                                       |
 
 可通过 MCP（Model Context Protocol）集成更多工具。
 
@@ -200,11 +200,11 @@ docker compose up -d
 
 应用访问地址：**http://localhost:8000**。compose 文件包含：
 
-| 服务 | 镜像 | 端口 |
-|---------|-------|------|
-| `app` | `milo-agent:latest`（本地构建） | 8000 |
-| `redis` | `redis:7-alpine` | 6379 |
-| `mongodb` | `mongo:7` | 27017 |
+| 服务        | 镜像                              | 端口  |
+| ----------- | --------------------------------- | ----- |
+| `app`     | `milo-agent:latest`（本地构建） | 8000  |
+| `redis`   | `redis:7-alpine`                | 6379  |
+| `mongodb` | `mongo:7`                       | 27017 |
 
 所有服务通过内部 `milo-net` 桥接网络通信。Redis 和 MongoDB 数据保存在命名卷中。
 
@@ -279,23 +279,22 @@ server {
 
 ### 环境变量
 
-| 变量 | 必填 | 默认值 |
-|----------|----------|---------|
-| `MODEL_API_KEY` | 是 | — |
-| `MODEL_NAME` | 否 | 模型名称 |
-| `MODEL_BASE_URL` | 否 | 模型地址 |
-| `OPENSANDBOX_SERVER_URL` | 是 | OpenSandbox 地址 |
-| `OPENSANDBOX_API_KEY` | 是 | — |
-| `REDIS_HOST` | 否 | `localhost` |
-| `REDIS_PORT` | 否 | `6379` |
-| `MONGO_URI` | 否 | `mongodb://localhost:27017` |
-| `MONGO_DB_NAME` | 否 | `MiloAgent` |
-| `USE_MONGO_PERSISTENCE` | 否 | `false` |
-| `JWT_SECRET_KEY` | 否 | 开发环境自动生成 |
-| `JWT_ALGORITHM` | 否 | `HS256` |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | 否 | `1440` |
-| `SANDBOX_TIMEOUT_HOURS` | 否 | `24` |
-| `TAVILY_API_KEY` | 否 | — |
+| 变量                            | 必填 | 默认值                        |
+| ------------------------------- | ---- | ----------------------------- |
+| `MODEL_API_KEY`               | 是   | —                            |
+| `MODEL_NAME`                  | 否   | 模型名称                      |
+| `MODEL_BASE_URL`              | 否   | 模型地址                      |
+| `OPENSANDBOX_SERVER_URL`      | 是   | OpenSandbox 地址              |
+| `OPENSANDBOX_API_KEY`         | 是   | —                            |
+| `REDIS_HOST`                  | 否   | `localhost`                 |
+| `REDIS_PORT`                  | 否   | `6379`                      |
+| `MONGO_URI`                   | 否   | `mongodb://localhost:27017` |
+| `MONGO_DB_NAME`               | 否   | `MiloAgent`                 |
+| `JWT_SECRET_KEY`              | 否   | 开发环境自动生成              |
+| `JWT_ALGORITHM`               | 否   | `HS256`                     |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | 否   | `1440`                      |
+| `SANDBOX_TIMEOUT_HOURS`       | 否   | `24`                        |
+| `TAVILY_API_KEY`              | 否   | —                            |
 
 ## 沙盒生命周期
 
@@ -316,4 +315,3 @@ Skill 是安装到沙盒 `/skills/` 目录的 zip 包：
 
 > [!NOTE]
 > Skill 产生的系统状态（如 `apt-get install`）不会在沙盒重建后保留 — 仅保留安装记录，需要重新执行系统级操作。
-

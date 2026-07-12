@@ -32,15 +32,15 @@ Your personal AI assistant. Just chat with it to search for information, process
                          └─────────┘             └─────────────┘       └────────────┘
 ```
 
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Frontend | React 19 + TypeScript + Tailwind CSS 4 | Chat UI with Markdown, tool call cards, streaming |
-| API | FastAPI + Uvicorn | REST endpoints, SSE streaming, JWT auth |
-| Agent | LangGraph + DeepAgents | Multi-step reasoning, tool orchestration, subagents |
-| Checkpoint | MongoDB | Conversation history, agent state persistence |
-| Memory | MongoDB Store | Long-term user preferences at `/memories/` |
-| Metadata | Redis | Thread list, sandbox mappings, skill records |
-| Sandbox | OpenSandbox | Isolated shell commands, file I/O, code execution |
+| Layer      | Technology                             | Purpose                                             |
+| ---------- | -------------------------------------- | --------------------------------------------------- |
+| Frontend   | React 19 + TypeScript + Tailwind CSS 4 | Chat UI with Markdown, tool call cards, streaming   |
+| API        | FastAPI + Uvicorn                      | REST endpoints, SSE streaming, JWT auth             |
+| Agent      | LangGraph + DeepAgents                 | Multi-step reasoning, tool orchestration, subagents |
+| Checkpoint | MongoDB                                | Conversation history, agent state persistence       |
+| Memory     | MongoDB Store                          | Long-term user preferences at`/memories/`         |
+| Metadata   | Redis                                  | Thread list, sandbox mappings, skill records        |
+| Sandbox    | OpenSandbox                            | Isolated shell commands, file I/O, code execution   |
 
 ## Quick start
 
@@ -84,53 +84,53 @@ All endpoints are prefixed with `/api`. Protected endpoints require `Authorizati
 
 ### Authentication
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/auth/register` | No | Register a new user |
-| `POST` | `/auth/login` | No | Login, returns JWT |
-| `GET` | `/auth/me` | Yes | Get current user info |
+| Method   | Path               | Auth | Description           |
+| -------- | ------------------ | ---- | --------------------- |
+| `POST` | `/auth/register` | No   | Register a new user   |
+| `POST` | `/auth/login`    | No   | Login, returns JWT    |
+| `GET`  | `/auth/me`       | Yes  | Get current user info |
 
 ### Threads
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/threads` | Yes | Create a new thread |
-| `GET` | `/threads` | Yes | List user's threads |
-| `GET` | `/threads/{id}` | Yes | Get thread metadata |
-| `DELETE` | `/threads/{id}` | Yes | Delete thread and its sandbox |
+| Method     | Path              | Auth | Description                   |
+| ---------- | ----------------- | ---- | ----------------------------- |
+| `POST`   | `/threads`      | Yes  | Create a new thread           |
+| `GET`    | `/threads`      | Yes  | List user's threads           |
+| `GET`    | `/threads/{id}` | Yes  | Get thread metadata           |
+| `DELETE` | `/threads/{id}` | Yes  | Delete thread and its sandbox |
 
 ### Runs
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/threads/{id}/runs` | Yes | Non-streaming run |
-| `POST` | `/threads/{id}/runs/stream` | Yes | **SSE streaming run** |
-| `GET` | `/threads/{id}/state` | Yes | Read thread state / messages |
+| Method   | Path                          | Auth | Description                  |
+| -------- | ----------------------------- | ---- | ---------------------------- |
+| `POST` | `/threads/{id}/runs`        | Yes  | Non-streaming run            |
+| `POST` | `/threads/{id}/runs/stream` | Yes  | **SSE streaming run**  |
+| `GET`  | `/threads/{id}/state`       | Yes  | Read thread state / messages |
 
 ### SSE stream events
 
 The streaming endpoint emits the following events:
 
-| `type` | Payload | Description |
-|--------|---------|-------------|
-| `message` | `content`, `tool_calls`, `tool_call_chunks` | AI text delta and/or tool call information |
-| `tool_result` | `tool_call_id`, `name`, `content` | Tool execution result |
-| `done` | `thread_id` | Stream completed successfully |
-| `error` | `detail` | Error message |
+| `type`        | Payload                                           | Description                                |
+| --------------- | ------------------------------------------------- | ------------------------------------------ |
+| `message`     | `content`, `tool_calls`, `tool_call_chunks` | AI text delta and/or tool call information |
+| `tool_result` | `tool_call_id`, `name`, `content`           | Tool execution result                      |
+| `done`        | `thread_id`                                     | Stream completed successfully              |
+| `error`       | `detail`                                        | Error message                              |
 
 ## Built-in tools
 
 The agent comes with a set of built-in tools accessible from the sandbox:
 
-| Tool | Description |
-|------|-------------|
-| `search` | Web search via Tavily |
-| `read_file` | Read files from sandbox (supports PDF, Markdown, DOCX, XLSX, PPTX, TXT) |
-| `save_to_markdown` | Save text as a Markdown file in the sandbox |
-| `save_to_pdf` | Save text as a PDF in the sandbox |
-| `generate_download_url` | Generate a signed download URL for a sandbox file |
-| `install_skill` | Download and install a skill from a URL |
-| `utc_now` | Get current UTC timestamp |
+| Tool                      | Description                                                             |
+| ------------------------- | ----------------------------------------------------------------------- |
+| `search`                | Web search via Tavily                                                   |
+| `read_file`             | Read files from sandbox (supports PDF, Markdown, DOCX, XLSX, PPTX, TXT) |
+| `save_to_markdown`      | Save text as a Markdown file in the sandbox                             |
+| `save_to_pdf`           | Save text as a PDF in the sandbox                                       |
+| `generate_download_url` | Generate a signed download URL for a sandbox file                       |
+| `install_skill`         | Download and install a skill from a URL                                 |
+| `utc_now`               | Get current UTC timestamp                                               |
 
 Additional tools can be integrated via MCP (Model Context Protocol).
 
@@ -200,11 +200,11 @@ docker compose up -d
 
 The app is available at **http://localhost:8000**. The compose file includes:
 
-| Service | Image | Port |
-|---------|-------|------|
-| `app` | `milo-agent:latest` (built locally) | 8000 |
-| `redis` | `redis:7-alpine` | 6379 |
-| `mongodb` | `mongo:7` | 27017 |
+| Service     | Image                                 | Port  |
+| ----------- | ------------------------------------- | ----- |
+| `app`     | `milo-agent:latest` (built locally) | 8000  |
+| `redis`   | `redis:7-alpine`                    | 6379  |
+| `mongodb` | `mongo:7`                           | 27017 |
 
 All services are connected via an internal `milo-net` bridge network. Redis and MongoDB data are persisted in named volumes.
 
@@ -279,23 +279,22 @@ server {
 
 ### Environment variables
 
-| Variable                      | Required | Default |
-|-------------------------------|----------|--|
-| `MODEL_API_KEY`               | Yes | — |
-| `MODEL_NAME`                  | No | |
-| `MODEL_BASE_URL`              | No | |
-| `OPENSANDBOX_SERVER_URL`      | Yes |  |
-| `OPENSANDBOX_API_KEY`         | Yes | — |
-| `REDIS_HOST`                  | No | `localhost` |
-| `REDIS_PORT`                  | No | `6379` |
-| `MONGO_URI`                   | No | `mongodb://localhost:27017` |
-| `MONGO_DB_NAME`               | No | `MiloAgent` |
-| `USE_MONGO_PERSISTENCE`       | No | `false` |
-| `JWT_SECRET_KEY`              | No | auto-generated |
-| `JWT_ALGORITHM`               | No | `HS256` |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `1440` |
-| `SANDBOX_TIMEOUT_HOURS`       | No | `24` |
-| `TAVILY_API_KEY`              | No | — |
+| Variable                        | Required | Default                       |
+| ------------------------------- | -------- | ----------------------------- |
+| `MODEL_API_KEY`               | Yes      | —                            |
+| `MODEL_NAME`                  | No       |                               |
+| `MODEL_BASE_URL`              | No       |                               |
+| `OPENSANDBOX_SERVER_URL`      | Yes      |                               |
+| `OPENSANDBOX_API_KEY`         | Yes      | —                            |
+| `REDIS_HOST`                  | No       | `localhost`                 |
+| `REDIS_PORT`                  | No       | `6379`                      |
+| `MONGO_URI`                   | No       | `mongodb://localhost:27017` |
+| `MONGO_DB_NAME`               | No       | `MiloAgent`                 |
+| `JWT_SECRET_KEY`              | No       | auto-generated                |
+| `JWT_ALGORITHM`               | No       | `HS256`                     |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | No       | `1440`                      |
+| `SANDBOX_TIMEOUT_HOURS`       | No       | `24`                        |
+| `TAVILY_API_KEY`              | No       | —                            |
 
 ## Sandbox lifecycle
 

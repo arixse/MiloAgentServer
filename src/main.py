@@ -69,7 +69,17 @@ async def lifespan(app: FastAPI):
     logger.info("MiloAgent 启动中...")
 
     try:
-        mongo_client = MongoClient("mongodb://localhost:27017")
+        mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+        mongo_username = os.getenv("MONGO_USERNAME", "")
+        mongo_password = os.getenv("MONGO_PASSWORD", "")
+        if mongo_username and mongo_password:
+            mongo_client = MongoClient(
+                mongo_uri,
+                username=mongo_username,
+                password=mongo_password,
+            )
+        else:
+            mongo_client = MongoClient(mongo_uri)
         init_auth_mongo(mongo_client)
         logger.info("MongoDB 用户集合已初始化")
     except Exception as e:

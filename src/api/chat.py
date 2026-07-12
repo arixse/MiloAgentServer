@@ -103,7 +103,7 @@ async def create_thread(
 ) -> ThreadInfo:
     """创建一个新的对话线程，绑定到当前认证用户。
 
-    线程元数据写入 Redis 持久化。首次调用 runs 时自动初始化 agent + sandbox。
+    线程元数据写入 MongoDB 持久化。首次调用 runs 时自动初始化 agent + sandbox。
     """
     user_id = current_user["user_id"]
     thread_id = new_thread_id()
@@ -116,12 +116,12 @@ async def create_thread(
 async def list_threads(
     current_user: dict = Depends(get_current_user),
 ) -> list[ThreadInfo]:
-    """返回当前认证用户的所有线程（从 Redis 读取，重启不丢失）。"""
+    """返回当前认证用户的所有线程（从 MongoDB 读取，重启不丢失）。"""
     user_id = current_user["user_id"]
     try:
         threads = await list_threads_by_user(user_id)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"无法连接 Redis，请确认 Redis 服务已启动: {e}")
+        raise HTTPException(status_code=503, detail=f"无法连接 MongoDB，请确认 MongoDB 服务已启动: {e}")
     return [_meta_to_info(t) for t in threads]
 
 
@@ -270,7 +270,7 @@ async def get_state(
 ) -> StateResponse:
     """获取指定线程的当前状态（消息历史、变量等）。
 
-    线程元数据从 Redis 验证归属，状态从 MongoDB checkpoint 读取。
+    线程元数据从 MongoDB 验证归属，状态从 MongoDB checkpoint 读取。
     """
     user_id = current_user["user_id"]
     await _require_owner(thread_id, user_id)
@@ -291,7 +291,7 @@ async def get_state(
 # =============================================================================
 
 def _meta_to_info(meta: dict) -> ThreadInfo:
-    """将 Redis 元数据 dict 转为 ThreadInfo 模型。"""
+    """将线程元数据 dict 转为 ThreadInfo 模型。"""
     return ThreadInfo(
         thread_id=meta.get("thread_id", ""),
         user_id=meta.get("user_id", ""),

@@ -43,8 +43,9 @@ logger.debug("root_path: %s", root_path)
 # ---------------------------------------------------------------------------
 # MongoDB / 持久化配置
 # ---------------------------------------------------------------------------
-USE_MONGO_PERSISTENCE = True
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_USERNAME = os.getenv("MONGO_USERNAME", "")
+MONGO_PASSWORD = os.getenv("MONGO_PASSWORD", "")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "MiloAgent")
 
 _mongo_client: MongoClient | None = None
@@ -53,7 +54,14 @@ _mongo_client: MongoClient | None = None
 def _get_mongo_client() -> MongoClient:
     global _mongo_client
     if _mongo_client is None:
-        _mongo_client = MongoClient(MONGO_URI)
+        if MONGO_USERNAME and MONGO_PASSWORD:
+            _mongo_client = MongoClient(
+                MONGO_URI,
+                username=MONGO_USERNAME,
+                password=MONGO_PASSWORD,
+            )
+        else:
+            _mongo_client = MongoClient(MONGO_URI)
         logger.info("已连接到 MongoDB: %s", MONGO_URI)
     return _mongo_client
 
@@ -180,41 +188,37 @@ async def _build_agent(user_id: str):
 
     opensandbox_backend = await get_or_create_sandbox(user_id)
 
-    def backend_factory(runtime):
-        return CompositeBackend(
-            default=opensandbox_backend,
-            routes={
-                "/memories/": StoreBackend(
-                    runtime,
-                    namespace=lambda ctx: ("memories",),
-                ),
-            },
-        )
+    # MongoDB 持久化
+    mongo_client = _get_mongo_client()
+    store_db = mongo_client[f"{MONGO_DB_NAME}_store"]
+    store = MongoDBStore(store_db["persistent_store"])
 
     agent_kwargs: dict = {}
-    if USE_MONGO_PERSISTENCE:
-        mongo_client = _get_mongo_client()
-        agent_kwargs["checkpointer"] = MongoDBSaver(
-            mongo_client,
-            db_name=f"{MONGO_DB_NAME}_checkpoints",
-        )
-        store_db = mongo_client[f"{MONGO_DB_NAME}_store"]
-        agent_kwargs["store"] = MongoDBStore(
-            store_db["persistent_store"],
-        )
-        logger.info(
-            "MongoDB 持久化: checkpointer=%s_checkpoints, store=%s_store",
-            MONGO_DB_NAME, MONGO_DB_NAME,
-        )
-    else:
-        from langgraph.store.memory import InMemoryStore
-        agent_kwargs["store"] = InMemoryStore()
-        logger.info("未启用 MongoDB，使用内存存储（重启后数据丢失）")
+    agent_kwargs["checkpointer"] = MongoDBSaver(
+        mongo_client,
+        db_name=f"{MONGO_DB_NAME}_checkpoints",
+    )
+    agent_kwargs["store"] = store
+    logger.info(
+        "MongoDB 持久化: checkpointer=%s_checkpoints, store=%s_store",
+        MONGO_DB_NAME, MONGO_DB_NAME,
+    )
+
+    # 直接传 BackendProtocol 实例（不再使用 callable factory，避免 deprecation）
+    backend = CompositeBackend(
+        default=opensandbox_backend,
+        routes={
+            "/memories/": StoreBackend(
+                store=store,
+                namespace=lambda rt: ("memories",),
+            ),
+        },
+    )
 
     agent = create_deep_agent(
         model=DEFAULT_MODEL,
         tools=[utc_now, *file_tools, *search_tools, *mcp_tools, *skill_tools],
-        backend=backend_factory,
+        backend=backend,
         system_prompt=SYSTEM_PROMPT,
         memory=["/AGENTS.md", f"/memories/{user_id}/preferences.md"],
         subagents=get_sub_agents(),
@@ -226,11 +230,11 @@ async def _build_agent(user_id: str):
 
 
 async def get_or_create_agent(thread_id: str, user_id: str):
-    """获取或创建指定 thread 的 agent 实例（带缓存 + Redis 持久化）。
+    """获取或创建指定 thread 的 agent 实例（带缓存 + MongoDB 持久化）。
 
     每个 thread 独占一个 agent + sandbox，避免并发冲突。
     使用 asyncio.Lock 防止并发时重复创建同一个 thread 的 agent。
-    首次创建时自动将线程元数据写入 Redis。
+    首次创建时自动将线程元数据写入 MongoDB。
     """
     if thread_id in _agent_cache:
         return _agent_cache[thread_id]
@@ -240,7 +244,7 @@ async def get_or_create_agent(thread_id: str, user_id: str):
             return _agent_cache[thread_id]
         logger.info("创建新 agent: thread_id=%s, user_id=%s", thread_id, user_id)
 
-        # 若 Redis 无此线程记录则写入（API 侧可能已提前 create_thread）
+        # 若 MongoDB 无此线程记录则写入（API 侧可能已提前 create_thread）
         existing = await get_thread_meta(thread_id)
         if not existing:
             await save_thread_meta(thread_id, user_id)
@@ -251,7 +255,7 @@ async def get_or_create_agent(thread_id: str, user_id: str):
 
 
 async def cleanup_thread(thread_id: str) -> bool:
-    """清理指定 thread 的 agent 缓存和 Redis 元数据。
+    """清理指定 thread 的 agent 缓存和 MongoDB 元数据。
 
     注意：不销毁 sandbox，因为沙盒按用户共享，其他线程可能仍在使用。
 

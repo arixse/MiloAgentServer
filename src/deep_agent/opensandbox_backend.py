@@ -45,6 +45,7 @@ SANDBOX_RENEW_HOURS = SANDBOX_TIMEOUT_HOURS * 0.8
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
 REDIS_KEY_PREFIX = "milo_agent:sandbox"
 
 # 全局 Redis 客户端（延迟初始化）
@@ -52,6 +53,8 @@ _redis_client: aioredis.Redis | None = None
 
 # MongoDB 持久化配置（复用 graph.py 的环境变量）
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_USERNAME = os.getenv("MONGO_USERNAME", "")
+MONGO_PASSWORD = os.getenv("MONGO_PASSWORD", "")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "MiloAgent")
 _mongo_client: MongoClient | None = None
 
@@ -73,6 +76,7 @@ async def _get_redis() -> aioredis.Redis:
             host=REDIS_HOST,
             port=REDIS_PORT,
             db=REDIS_DB,
+            password=REDIS_PASSWORD or None,
             decode_responses=True,
         )
     return _redis_client
@@ -228,6 +232,7 @@ def _get_connection_config() -> ConnectionConfigSync:
         domain=os.getenv("OPENSANDBOX_SERVER_URL", "http://182.254.183.29:8080"),
         use_server_proxy=True,
         api_key=os.getenv("OPENSANDBOX_API_KEY"),
+        request_timeout=timedelta(minutes=5),  # 创建 sandbox 可能需要拉取镜像，30s 默认值不够
     )
 
 
@@ -243,7 +248,14 @@ def _get_mongo() -> MongoClient:
     """获取或创建 MongoDB 客户端（单例）。"""
     global _mongo_client
     if _mongo_client is None:
-        _mongo_client = MongoClient(MONGO_URI)
+        if MONGO_USERNAME and MONGO_PASSWORD:
+            _mongo_client = MongoClient(
+                MONGO_URI,
+                username=MONGO_USERNAME,
+                password=MONGO_PASSWORD,
+            )
+        else:
+            _mongo_client = MongoClient(MONGO_URI)
         logger.info("已连接到 MongoDB: %s", MONGO_URI)
     return _mongo_client
 
@@ -402,6 +414,56 @@ def list_persisted_skills(user_id: str) -> list[str]:
         return []
 
 
+def _ensure_pip(sandbox: SandboxSync) -> None:
+    """确保 sandbox 中 pip 可用。
+
+    按顺序尝试：
+    1. 已有 pip → 直接返回
+    2. ensurepip 引导安装（Python 内置）
+    3. apt-get（Debian/Ubuntu）
+    4. apk（Alpine）
+    """
+
+    def _run(cmd: str) -> str:
+        """执行命令并返回 stdout，失败返回空字符串。"""
+        result = sandbox.commands.run(cmd)
+        if result.exit_code == 0 and result.logs.stdout:
+            return result.logs.stdout[0].text
+        return ""
+
+    # 1) 检查是否已有 pip
+    version = _run("python3 -m pip --version 2>&1") or _run("python -m pip --version 2>&1")
+    if version.strip():
+        logger.info("pip 已就绪: %s", version.strip().split("\n")[0])
+        return
+
+    # 2) 尝试 ensurepip（Python 内置）
+    if _run("python3 -m ensurepip --upgrade 2>&1") or _run("python -m ensurepip --upgrade 2>&1"):
+        version = _run("python3 -m pip --version 2>&1") or _run("python -m pip --version 2>&1")
+        if version.strip():
+            logger.info("pip 通过 ensurepip 安装成功: %s", version.strip().split("\n")[0])
+            return
+
+    # 3) 尝试 apt-get（Debian/Ubuntu）
+    if _run("which apt-get 2>&1"):
+        _run("apt-get update -qq 2>&1")
+        if _run("apt-get install -y -qq python3-pip 2>&1"):
+            version = _run("python3 -m pip --version 2>&1")
+            if version.strip():
+                logger.info("pip 通过 apt-get 安装成功: %s", version.strip().split("\n")[0])
+                return
+
+    # 4) 尝试 apk（Alpine）
+    if _run("which apk 2>&1"):
+        if _run("apk add --no-cache py3-pip 2>&1"):
+            version = _run("python3 -m pip --version 2>&1")
+            if version.strip():
+                logger.info("pip 通过 apk 安装成功: %s", version.strip().split("\n")[0])
+                return
+
+    logger.warning("pip 未能安装，Python 包安装功能不可用")
+
+
 def _init_sandbox_filesystem(sandbox: SandboxSync, user_id: str) -> None:
     """初始化沙盒文件系统：创建必要目录，上传 AGENTS.md，并从 MongoDB 恢复持久化文件。
 
@@ -411,17 +473,8 @@ def _init_sandbox_filesystem(sandbox: SandboxSync, user_id: str) -> None:
     sandbox.commands.run("mkdir -p /skills /memories")
     logger.info("已创建目录: /skills, /memories")
 
-    # 1.5 确保 pip 可用（镜像可能未预装）
-    pip_check = sandbox.commands.run(
-        "python3 -m pip --version 2>/dev/null || "
-        "python3 -m ensurepip --upgrade 2>/dev/null || "
-        "apt-get update -qq 2>/dev/null && apt-get install -y -qq python3-pip 2>/dev/null; "
-        "python3 -m pip --version 2>/dev/null && echo 'pip ready' || echo 'pip unavailable'"
-    )
-    if "pip ready" in (pip_check.logs.stdout[0].text if pip_check.logs.stdout else ""):
-        logger.info("pip 已就绪")
-    else:
-        logger.warning("pip 未能安装，Python 包安装功能不可用")
+    # 1.5 确保 pip 可用（镜像可能未预装，支持 Debian/Ubuntu 和 Alpine）
+    _ensure_pip(sandbox)
 
     # 2. 上传本地 AGENTS.md 到沙盒根目录
     if os.path.isfile(_LOCAL_AGENTS_MD):
@@ -537,6 +590,7 @@ def _create_sandbox_instance() -> SandboxSync:
         "opensandbox/code-interpreter:v1.0.2",
         connection_config=config,
         timeout=timedelta(hours=SANDBOX_TIMEOUT_HOURS),
+        ready_timeout=timedelta(minutes=5),  # 等待 sandbox 健康检查就绪的超时
         entrypoint=["/opt/opensandbox/code-interpreter.sh"],
         env={
             "PYTHON_VERSION": "3.11",
