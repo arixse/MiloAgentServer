@@ -12,6 +12,9 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+import io
+import urllib.parse
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
@@ -295,6 +298,43 @@ async def get_state(
         return StateResponse(thread_id=thread_id, user_id=user_id, values=values)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# File download — 直接通过 OpenSandbox API 读取文件并流式返回
+# =============================================================================
+
+@router.get("/files/download", summary="下载沙盒中的文件")
+async def download_file(
+    thread_id: str = Query(..., description="线程 ID（用于归属校验）"),
+    file_path: str = Query(..., description="沙盒中的文件路径，如 /tmp/report.pdf"),
+    current_user: dict = Depends(get_current_user),
+):
+    """从 OpenSandbox 沙盒中下载指定文件。
+
+    通过 sandbox.files.read_bytes() 直接读取，无需在沙盒内启动 HTTP 服务器。
+    文件名从路径中自动提取。
+    """
+    user_id = current_user["user_id"]
+    await _require_owner(thread_id, user_id)
+
+    try:
+        backend = await get_or_create_sandbox(user_id)
+        content = backend.sandbox.files.read_bytes(file_path)
+
+        filename = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
+        encoded_filename = urllib.parse.quote(filename, safe="")
+
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{encoded_filename}"',
+                "Content-Length": str(len(content)),
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"文件下载失败: {e}")
 
 
 # =============================================================================
