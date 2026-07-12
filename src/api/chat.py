@@ -17,6 +17,8 @@ from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
+import asyncio
+
 from auth.dependencies import get_current_user
 from deep_agent.graph import (
     cleanup_thread,
@@ -25,6 +27,8 @@ from deep_agent.graph import (
     list_threads_by_user,
     new_thread_id,
     save_thread_meta,
+)
+from deep_agent.opensandbox_backend import get_or_create_sandbox
 )
 
 router = APIRouter(prefix="/api", tags=["LangGraph API"])
@@ -103,9 +107,11 @@ async def create_thread(
 ) -> ThreadInfo:
     """创建一个新的对话线程，绑定到当前认证用户。
 
-    线程元数据写入 MongoDB 持久化。首次调用 runs 时自动初始化 agent + sandbox。
+    线程元数据写入 MongoDB 持久化。同时在后台预创建 sandbox。
     """
     user_id = current_user["user_id"]
+    # 后台预创建 sandbox（fire-and-forget）
+    asyncio.create_task(get_or_create_sandbox(user_id))
     thread_id = new_thread_id()
     await save_thread_meta(thread_id, user_id=user_id, metadata=body.metadata)
     meta = await _get_owner_meta(thread_id)
@@ -116,8 +122,13 @@ async def create_thread(
 async def list_threads(
     current_user: dict = Depends(get_current_user),
 ) -> list[ThreadInfo]:
-    """返回当前认证用户的所有线程（从 MongoDB 读取，重启不丢失）。"""
+    """返回当前认证用户的所有线程（从 MongoDB 读取，重启不丢失）。
+
+    同时在后台预创建 sandbox，使后续的 state/runs 请求无需等待 sandbox 创建。
+    """
     user_id = current_user["user_id"]
+    # 后台预创建 sandbox（fire-and-forget），不阻塞线程列表响应
+    asyncio.create_task(get_or_create_sandbox(user_id))
     try:
         threads = await list_threads_by_user(user_id)
     except Exception as e:

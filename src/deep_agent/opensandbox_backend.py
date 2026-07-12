@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
@@ -53,6 +54,7 @@ _PERSIST_FILES = [
 
 # 用于缓存不同 user_id 对应的沙盒后端实例（一个用户一个沙盒）
 _backends: dict[str, "OpenSandboxBackend"] = {}
+_sandbox_locks: dict[str, asyncio.Lock] = {}
 
 
 def _sandbox_mapping_collection():
@@ -600,65 +602,68 @@ async def get_or_create_sandbox(user_id: str) -> OpenSandboxBackend:
     Args:
         user_id: 用户 ID。
     """
-    # 1. 优先从内存缓存查找
+    # 1. 优先从内存缓存查找（无锁快速路径）
     if backend := _backends.get(user_id):
         return backend
 
-    # 2. 查询 MongoDB 中的历史映射，尝试重连已有沙盒
-    existing_mapping = await _get_sandbox_mapping(user_id)
-    if existing_mapping:
-        sandbox_id = existing_mapping["sandbox_id"]
-        logger.info("发现已有 sandbox 映射: user=%s sandbox=%s", user_id, sandbox_id)
-        try:
-            # 尝试重连到已有的沙盒实例
-            logger.info("正在重连 sandbox: %s", sandbox_id)
-            config = _get_connection_config()
-            sandbox = SandboxSync.connect(
-                sandbox_id,
-                connection_config=config,
-                connect_timeout=timedelta(seconds=10),
-            )
-            # 健康检查：执行一个简单命令验证沙盒是否真正可用
-            try:
-                result = sandbox.commands.run(
-                    "echo ok"
-                )
-                if result.exit_code != 0:
-                    raise RuntimeError(
-                        f"健康检查失败，exit_code={result.exit_code}"
-                    )
-            except Exception as health_err:
-                logger.warning("sandbox 健康检查失败 (%s): %s", sandbox_id, health_err)
-                sandbox.kill()
-                raise
-
-            backend = OpenSandboxBackend(sandbox, user_id=user_id)
-            _backends[user_id] = backend
-            logger.info("成功重连 sandbox: user=%s sandbox=%s", user_id, sandbox_id)
+    # 2. 并发控制：同一用户只允许一个 sandbox 创建/重连操作
+    lock = _sandbox_locks.setdefault(user_id, asyncio.Lock())
+    async with lock:
+        # 双重检查：锁内再次确认缓存（可能在等锁期间被其他协程创建好了）
+        if backend := _backends.get(user_id):
             return backend
 
-        except Exception as e:
-            logger.warning("sandbox 重连失败 (%s): %s，将创建新实例", sandbox_id, e)
-            # 删除失效的映射（创建新沙盒后会重新写入）
-            await _delete_sandbox_mapping(user_id)
+        # 3. 查询 MongoDB 中的历史映射，尝试重连已有沙盒
+        existing_mapping = await _get_sandbox_mapping(user_id)
+        if existing_mapping:
+            sandbox_id = existing_mapping["sandbox_id"]
+            logger.info("发现已有 sandbox 映射: user=%s sandbox=%s", user_id, sandbox_id)
+            try:
+                # 尝试重连到已有的沙盒实例
+                logger.info("正在重连 sandbox: %s", sandbox_id)
+                config = _get_connection_config()
+                sandbox = SandboxSync.connect(
+                    sandbox_id,
+                    connection_config=config,
+                    connect_timeout=timedelta(seconds=10),
+                )
+                # 健康检查：执行一个简单命令验证沙盒是否真正可用
+                try:
+                    result = sandbox.commands.run("echo ok")
+                    if result.exit_code != 0:
+                        raise RuntimeError(f"健康检查失败，exit_code={result.exit_code}")
+                except Exception as health_err:
+                    logger.warning("sandbox 健康检查失败 (%s): %s", sandbox_id, health_err)
+                    sandbox.kill()
+                    raise
 
-    # 3. 创建新的沙盒实例
-    sandbox = _create_sandbox_instance()
-    backend = OpenSandboxBackend(sandbox, user_id=user_id)
+                backend = OpenSandboxBackend(sandbox, user_id=user_id)
+                _backends[user_id] = backend
+                logger.info("成功重连 sandbox: user=%s sandbox=%s", user_id, sandbox_id)
+                return backend
 
-    # 初始化沙盒文件系统（目录 + AGENTS.md，仅新创建的沙盒）
-    _init_sandbox_filesystem(sandbox, user_id)
+            except Exception as e:
+                logger.warning("sandbox 重连失败 (%s): %s，将创建新实例", sandbox_id, e)
+                # 删除失效的映射（创建新沙盒后会重新写入）
+                await _delete_sandbox_mapping(user_id)
 
-    # 从 MongoDB 恢复该用户之前安装的 skill
-    await _restore_skills(user_id, sandbox)
+        # 4. 创建新的沙盒实例
+        sandbox = _create_sandbox_instance()
+        backend = OpenSandboxBackend(sandbox, user_id=user_id)
 
-    _backends[user_id] = backend
+        # 初始化沙盒文件系统（目录 + AGENTS.md，仅新创建的沙盒）
+        _init_sandbox_filesystem(sandbox, user_id)
 
-    # 4. 将映射关系持久化到 MongoDB
-    await _store_sandbox_mapping(user_id, backend.sandbox.id)
-    logger.info("sandbox 映射已存储: user=%s sandbox=%s", user_id, backend.sandbox.id)
+        # 从 MongoDB 恢复该用户之前安装的 skill
+        await _restore_skills(user_id, sandbox)
 
-    return backend
+        _backends[user_id] = backend
+
+        # 5. 将映射关系持久化到 MongoDB
+        await _store_sandbox_mapping(user_id, backend.sandbox.id)
+        logger.info("sandbox 映射已存储: user=%s sandbox=%s", user_id, backend.sandbox.id)
+
+        return backend
 
 
 def list_sandbox_users() -> list[str]:
