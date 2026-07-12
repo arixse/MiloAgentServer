@@ -196,6 +196,9 @@ def generate_download_url_from_sandbox(file_path: str, config: RunnableConfig) -
     Returns a URL pointing to the MiloAgent file download API,
     which reads the file directly from the sandbox via OpenSandbox API.
 
+    The URL includes the user's JWT token as a query parameter so the
+    download works when opened directly in the browser (no Authorization header).
+
     Args:
         file_path: Absolute path to the file in the sandbox, e.g. "/tmp/report.pdf".
         config: LangChain runtime config (auto-injected).
@@ -204,9 +207,14 @@ def generate_download_url_from_sandbox(file_path: str, config: RunnableConfig) -
     """
     import urllib.parse
 
-    thread_id = config.get("configurable", {}).get("thread_id", "")
+    cfg = config.get("configurable", {})
+    thread_id = cfg.get("thread_id", "")
+    token = cfg.get("token", "")
     encoded = urllib.parse.quote(file_path, safe="")
-    return f"{_API_BASE}/api/files/download?thread_id={thread_id}&file_path={encoded}"
+    url = f"{_API_BASE}/api/files/download?thread_id={thread_id}&file_path={encoded}"
+    if token:
+        url += f"&token={token}"
+    return url
 
 
 # 获取文件相关的tools

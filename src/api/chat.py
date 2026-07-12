@@ -22,7 +22,7 @@ from starlette.responses import StreamingResponse
 
 import asyncio
 
-from auth.dependencies import get_current_user
+from auth.dependencies import get_current_user, get_current_user_from_query_or_header
 from deep_agent.graph import (
     cleanup_thread,
     get_or_create_agent,
@@ -182,7 +182,7 @@ async def run_agent(
     if not lc_messages:
         raise HTTPException(status_code=400, detail="至少需要一条 role=user 的消息")
 
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "token": current_user.get("access_token", "")}}
 
     try:
         agent = await get_or_create_agent(thread_id, user_id=user_id)
@@ -218,7 +218,7 @@ async def run_agent_stream(
     if not lc_messages:
         raise HTTPException(status_code=400, detail="至少需要一条 role=user 的消息")
 
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "token": current_user.get("access_token", "")}}
 
     async def event_stream():
         try:
@@ -289,7 +289,7 @@ async def get_state(
     user_id = current_user["user_id"]
     await _require_owner(thread_id, user_id)
 
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "token": current_user.get("access_token", "")}}
 
     try:
         agent = await get_or_create_agent(thread_id, user_id=user_id)
@@ -308,7 +308,7 @@ async def get_state(
 async def download_file(
     thread_id: str = Query(..., description="线程 ID（用于归属校验）"),
     file_path: str = Query(..., description="沙盒中的文件路径，如 /tmp/report.pdf"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_from_query_or_header),
 ):
     """从 OpenSandbox 沙盒中下载指定文件。
 
