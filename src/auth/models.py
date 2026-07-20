@@ -34,3 +34,4 @@ class UserResponse(BaseModel):
     user_id: str
     username: str
     created_at: str
+    avatar_url: str | None = None

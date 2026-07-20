@@ -75,6 +75,7 @@ export interface RawToolCallChunk {
 export interface UserInfo {
   user_id: string;
   username: string;
+  avatar_url?: string;
 }
 
 export interface TokenData {
