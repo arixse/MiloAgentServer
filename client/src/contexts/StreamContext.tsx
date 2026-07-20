@@ -77,25 +77,51 @@ function mapStateMessages(rawMessages: unknown[]): ChatMessage[] {
 interface StreamState {
   messages: ChatMessage[];
   isLoading: boolean;
+  isLoadingMessages: boolean;
   threadId: string | null;
+  /** Cache loaded messages per thread so switching threads is instant. */
+  messagesByThread: Record<string, ChatMessage[]>;
 }
 
 type StreamAction =
-  | { type: 'LOAD_MESSAGES'; payload: ChatMessage[] }
+  | { type: 'LOAD_MESSAGES_START' }
+  | { type: 'LOAD_MESSAGES'; payload: { threadId: string; messages: ChatMessage[] } }
+  | { type: 'LOAD_MESSAGES_END' }
+  | { type: 'RESTORE_CACHED_MESSAGES'; payload: string }
   | { type: 'ADD_USER_MESSAGE'; payload: ChatMessage }
   | { type: 'START_STREAMING'; payload: string }
   | { type: 'APPEND_CONTENT'; payload: string }
   | { type: 'APPEND_TOOL_CHUNK'; payload: { id: string; name: string; chunkContent: string } }
   | { type: 'UPSERT_TOOL_CALL'; payload: { id: string; name: string; args: Record<string, unknown> } }
   | { type: 'UPDATE_TOOL_CALL'; payload: { toolCallId: string; name: string; result: string } }
-  | { type: 'FINISH_STREAMING' }
+  | { type: 'FINISH_STREAMING'; payload?: string }
   | { type: 'STREAM_ERROR'; payload: string }
   | { type: 'CLEAR_MESSAGES' };
 
 function streamReducer(state: StreamState, action: StreamAction): StreamState {
   switch (action.type) {
-    case 'LOAD_MESSAGES':
-      return { ...state, messages: action.payload };
+    case 'LOAD_MESSAGES_START':
+      return { ...state, isLoadingMessages: true };
+    case 'LOAD_MESSAGES': {
+      const { threadId, messages } = action.payload;
+      return {
+        ...state,
+        messages,
+        threadId,
+        isLoadingMessages: false,
+        messagesByThread: { ...state.messagesByThread, [threadId]: messages },
+      };
+    }
+    case 'LOAD_MESSAGES_END':
+      // Fallback: stop loading spinner even if no messages were loaded
+      return { ...state, isLoadingMessages: false };
+    case 'RESTORE_CACHED_MESSAGES': {
+      const cached = state.messagesByThread[action.payload];
+      if (cached) {
+        return { ...state, messages: cached, threadId: action.payload };
+      }
+      return state;
+    }
     case 'ADD_USER_MESSAGE':
       return { ...state, messages: [...state.messages, action.payload] };
     case 'START_STREAMING': {
@@ -214,8 +240,15 @@ function streamReducer(state: StreamState, action: StreamAction): StreamState {
       }
       return { ...state, messages: msgs };
     }
-    case 'FINISH_STREAMING':
-      return { ...state, isLoading: false };
+    case 'FINISH_STREAMING': {
+      // Cache the current messages when streaming finishes
+      const tid = action.payload || state.threadId;
+      const next: StreamState = { ...state, isLoading: false };
+      if (tid) {
+        next.messagesByThread = { ...state.messagesByThread, [tid]: state.messages };
+      }
+      return next;
+    }
     case 'STREAM_ERROR': {
       const msgs = [...state.messages];
       const last = msgs[msgs.length - 1];
@@ -245,6 +278,7 @@ function streamReducer(state: StreamState, action: StreamAction): StreamState {
 interface StreamContextValue {
   messages: ChatMessage[];
   isLoading: boolean;
+  isLoadingMessages: boolean;
   loadMessages: (threadId: string) => Promise<void>;
   submit: (text: string, threadId: string) => Promise<void>;
   stop: () => void;
@@ -256,20 +290,37 @@ export function StreamProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(streamReducer, {
     messages: [],
     isLoading: false,
+    isLoadingMessages: false,
     threadId: null,
+    messagesByThread: {},
   });
   const abortRef = useRef<AbortController | null>(null);
+  const cacheRef = useRef<Record<string, ChatMessage[]>>({});
+
+  // Keep cacheRef in sync so loadMessages (stable callback) always sees latest cache
+  cacheRef.current = state.messagesByThread;
 
   const loadMessages = useCallback(async (threadId: string) => {
-    // Clear immediately to prevent flash of old thread's messages
+    // Use cache if available — instant switch for previously viewed threads
+    const cached = cacheRef.current[threadId];
+    if (cached) {
+      dispatch({ type: 'RESTORE_CACHED_MESSAGES', payload: threadId });
+      return;
+    }
+
+    // Cache miss — clear and fetch from API
     dispatch({ type: 'CLEAR_MESSAGES' });
+    dispatch({ type: 'LOAD_MESSAGES_START' });
     try {
       const threadState = await threadsApi.getThreadState(threadId);
       const rawMessages = (threadState.values?.messages as unknown[]) || [];
       if (rawMessages.length > 0) {
-        dispatch({ type: 'LOAD_MESSAGES', payload: mapStateMessages(rawMessages) });
+        dispatch({ type: 'LOAD_MESSAGES', payload: { threadId, messages: mapStateMessages(rawMessages) } });
+      } else {
+        dispatch({ type: 'LOAD_MESSAGES_END' });
       }
     } catch (err: unknown) {
+      dispatch({ type: 'LOAD_MESSAGES_END' });
       const msg = err instanceof Error ? err.message : '未知错误';
       toast.error('加载消息失败', { description: msg });
     }
@@ -337,7 +388,7 @@ export function StreamProvider({ children }: { children: ReactNode }) {
           }
           case 'done':
             receivedDone = true;
-            dispatch({ type: 'FINISH_STREAMING' });
+            dispatch({ type: 'FINISH_STREAMING', payload: threadId });
             break;
           case 'error':
             toast.error('Agent 运行出错', { description: event.detail });
@@ -355,7 +406,7 @@ export function StreamProvider({ children }: { children: ReactNode }) {
       }
     } finally {
       if (!receivedDone) {
-        dispatch({ type: 'FINISH_STREAMING' });
+        dispatch({ type: 'FINISH_STREAMING', payload: threadId });
       }
       abortRef.current = null;
     }
@@ -366,7 +417,7 @@ export function StreamProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <StreamContext.Provider value={{ messages: state.messages, isLoading: state.isLoading, loadMessages, submit, stop }}>
+    <StreamContext.Provider value={{ messages: state.messages, isLoading: state.isLoading, isLoadingMessages: state.isLoadingMessages, loadMessages, submit, stop }}>
       {children}
     </StreamContext.Provider>
   );

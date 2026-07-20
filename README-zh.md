@@ -12,7 +12,7 @@
 - **工具调用可视化** — 可展开的工具调用卡片，按实际顺序展示参数和执行结果
 - **Skill 系统** — 支持从 URL 动态安装 Skill，沙盒重建后自动恢复
 - **JWT 认证** — 用户注册/登录，线程级别数据隔离
-- **持久化存储** — Redis 存储线程元数据，MongoDB 存储对话历史和长期记忆
+- **持久化存储** — MongoDB 统一存储对话历史、长期记忆和 sandbox 映射
 - **Docker 优先** — 多阶段构建将前后端打包为单一镜像
 
 ## 架构
@@ -23,13 +23,13 @@
 │  端口 5173 (仅开发)     │                     │  端口 8000               │
 └──────────────────────┘                       └────────┬─────────────────┘
                                                         │
-                              ┌─────────────────────────┼─────────────────────┐
-                              │                         │                     │
-                         ┌────▼────┐             ┌──────▼──────┐       ┌─────▼──────┐
-                         │  Redis   │             │   MongoDB    │       │ OpenSandbox │
-                         │ 元数据    │             │ checkpoint   │       │ 代码执行    │
-                         │ sandbox  │             │ store/记忆   │       │ 沙盒       │
-                         └─────────┘             └─────────────┘       └────────────┘
+                              ┌─────────────────────────┼─────────────┐
+                              │                         │             │
+                         ┌────▼──────┐           ┌──────▼──────┐       ┌─────▼──────┐
+                         │   MongoDB  │           │   MongoDB    │       │ OpenSandbox │
+                         │ checkpoint │           │ store/记忆   │       │ 代码执行    │
+                         │ 线程元数据 │           │ sandbox 映射 │       │ 沙盒       │
+                         └───────────┘           └─────────────┘       └────────────┘
 ```
 
 | 层         | 技术                                   | 用途                                            |
@@ -39,7 +39,7 @@
 | Agent      | LangGraph + DeepAgents                 | 多步骤推理，工具编排，子代理                    |
 | Checkpoint | MongoDB                                | 对话历史，Agent 状态持久化                      |
 | 记忆       | MongoDB Store                          | 用户长期偏好，存储在`/memories/`              |
-| 元数据     | Redis                                  | 线程列表，sandbox 映射，Skill 记录              |
+| 元数据     | MongoDB                                | 线程列表，sandbox 映射，Skill 记录              |
 | 沙盒       | OpenSandbox                            | 隔离的命令执行、文件读写、代码运行              |
 
 ## 快速开始
@@ -47,7 +47,6 @@
 ### 前置条件
 
 - Python 3.11+ + [uv](https://docs.astral.sh/uv/) 或 pip
-- Redis（任意版本）
 - MongoDB 7+
 - [OpenSandbox](http://182.254.183.29:8080) 服务
 - Node.js 22+（仅前端开发需要）
@@ -168,7 +167,7 @@ Agent 内置了可在沙盒中使用的工具集：
 │       └── lib/                             # TypeScript 类型和工具
 ├── AGENTS.md                                # Agent 系统提示词和规范
 ├── Dockerfile                               # 多阶段构建（前端 + 后端）
-├── docker-compose.yml                       # 全栈部署（app + Redis + MongoDB）
+├── docker-compose.yml                       # 全栈部署（app + MongoDB）
 └── .github/workflows/build-image.yml        # CI：GitHub Release 时构建镜像
 ```
 
@@ -194,7 +193,7 @@ cd MiloAgentServer
 cp .env.example .env
 # 编辑 .env，填入 API 密钥
 
-# 启动所有服务（app + Redis + MongoDB）
+# 启动所有服务（app + MongoDB）
 docker compose up -d
 ```
 
@@ -203,10 +202,10 @@ docker compose up -d
 | 服务        | 镜像                              | 端口  |
 | ----------- | --------------------------------- | ----- |
 | `app`     | `milo-agent:latest`（本地构建） | 8000  |
-| `redis`   | `redis:7-alpine`                | 6379  |
+
 | `mongodb` | `mongo:7`                       | 27017 |
 
-所有服务通过内部 `milo-net` 桥接网络通信。Redis 和 MongoDB 数据保存在命名卷中。
+所有服务通过内部 `milo-net` 桥接网络通信。MongoDB 数据保存在命名卷中。
 
 更新到新版本：
 
@@ -223,8 +222,7 @@ docker compose up -d --build
 # 拉取镜像
 docker pull ghcr.io/arixse/milo-agent-server:latest
 
-# 分别启动 Redis 和 MongoDB
-docker run -d --name milo-redis -p 6379:6379 redis:7-alpine
+# 启动 MongoDB
 docker run -d --name milo-mongo -p 27017:27017 mongo:7
 
 # 启动应用
@@ -232,7 +230,6 @@ docker run -d \
   --name milo-agent \
   -p 8000:8000 \
   --env-file .env \
-  -e REDIS_HOST=host.docker.internal \
   -e MONGO_URI=mongodb://host.docker.internal:27017 \
   ghcr.io/arixse/milo-agent-server:latest
 ```
@@ -242,7 +239,7 @@ docker run -d \
 
 ### 方式 3：手动部署
 
-**前置条件：** Python 3.11+、Node.js 22+、Redis、MongoDB。
+**前置条件：** Python 3.11+、Node.js 22+、MongoDB。
 
 ```bash
 # 构建前端
@@ -286,8 +283,6 @@ server {
 | `MODEL_BASE_URL`              | 否   | 模型地址                      |
 | `OPENSANDBOX_SERVER_URL`      | 是   | OpenSandbox 地址              |
 | `OPENSANDBOX_API_KEY`         | 是   | —                            |
-| `REDIS_HOST`                  | 否   | `localhost`                 |
-| `REDIS_PORT`                  | 否   | `6379`                      |
 | `MONGO_URI`                   | 否   | `mongodb://localhost:27017` |
 | `MONGO_DB_NAME`               | 否   | `MiloAgent`                 |
 | `JWT_SECRET_KEY`              | 否   | 开发环境自动生成              |
@@ -300,7 +295,7 @@ server {
 
 - 每个线程独享一个隔离的 OpenSandbox 实例（`opensandbox/code-interpreter:v1.0.2`）
 - 沙盒在后台自动续期（默认 24 小时超时）
-- 服务重启时通过 Redis 映射重连已有沙盒
+- 服务重启时通过 MongoDB 映射重连已有沙盒
 - 删除线程或关闭服务时自动清理对应沙盒
 - 沙盒初始化时通过三层回退自动安装 **pip**（内置 pip → `ensurepip` → `apt-get`）
 
@@ -310,7 +305,7 @@ Skill 是安装到沙盒 `/skills/` 目录的 zip 包：
 
 1. Agent 调用 `install_skill`，传入 Skill 名称和下载链接
 2. zip 包下载后上传到沙盒并解压
-3. 安装记录按用户维度存储在 Redis 中
+3. 安装记录按用户维度存储在 MongoDB 中
 4. 沙盒销毁重建后自动恢复该用户的所有已安装 Skill
 
 > [!NOTE]

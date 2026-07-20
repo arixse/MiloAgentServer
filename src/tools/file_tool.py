@@ -184,50 +184,49 @@ def save_to_pdf(text: str, file_name: str, config: RunnableConfig) -> str:
         return f"保存 PDF 文件失败: {e}"
 
 
-HTTP_SERVE_PORT = 8765
+import os as _os
 
-
-def _get_stdout(result) -> str:
-    """从 OpenSandbox Execution 结果中提取 stdout 文本。"""
-    if result.logs.stdout:
-        return result.logs.stdout[0].text
-    return ""
-
-
-def _ensure_http_server(sandbox) -> None:
-    """确保 sandbox 中 HTTP 文件服务器已启动。"""
-    check = sandbox.commands.run(
-        f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{HTTP_SERVE_PORT}/ 2>/dev/null"
-    )
-    if check.exit_code == 0 and _get_stdout(check).strip() == "200":
-        return None
-
-    sandbox.commands.run(
-        f"pkill -f 'http.server {HTTP_SERVE_PORT}' 2>/dev/null; "
-        f"nohup python3 -m http.server {HTTP_SERVE_PORT} --bind 0.0.0.0 --directory / > /dev/null 2>&1 &"
-    )
-    return None
+_API_BASE = _os.getenv("MILO_API_BASE", "http://localhost:8000")
 
 
 @tool
 def generate_download_url_from_sandbox(file_path: str, config: RunnableConfig) -> str:
-    """Generate a public download URL for a file in the sandbox.
+    """Generate a download URL for a file in the sandbox.
 
-    Starts an HTTP server in the sandbox if not already running,
-    then creates a signed endpoint pointing to the file.
+    Returns a URL pointing to the MiloAgent file download API,
+    which reads the file directly from the sandbox via OpenSandbox API.
+
+    Verifies the file exists before returning the URL.
 
     Args:
         file_path: Absolute path to the file in the sandbox, e.g. "/tmp/report.pdf".
+        config: LangChain runtime config (auto-injected).
     Returns:
-        Public download URL for the file.
+        Download URL for the file, or error message if file not found.
     """
+    import urllib.parse
+
     try:
         sandbox = get_sandbox_sync(config)
-        _ensure_http_server(sandbox)
-        endpoint = sandbox.get_signed_endpoint(HTTP_SERVE_PORT, expires=3600)
-        return f"{endpoint.endpoint.rstrip('/')}{file_path}"
+        # Verify file exists by listing or attempting a stat
+        check = sandbox.commands.run(f"test -f {file_path} && echo 'exists' || echo 'missing'")
+        stdout = check.logs.stdout[0].text if check.logs.stdout else ""
+        if "missing" in stdout:
+            # Try to list /tmp contents to help debugging
+            ls = sandbox.commands.run(f"ls -la {file_path} 2>&1 || ls -la /tmp/ 2>&1 | head -20")
+            ls_out = ls.logs.stdout[0].text if ls.logs.stdout else ""
+            return f"文件不存在: {file_path}\n\n/tmp/ 目录内容:\n{ls_out}"
     except Exception as e:
-        return f"Failed to generate download URL: {e}"
+        return f"无法验证文件: {e}"
+
+    cfg = config.get("configurable", {})
+    thread_id = cfg.get("thread_id", "")
+    token = cfg.get("token", "")
+    encoded = urllib.parse.quote(file_path, safe="")
+    url = f"{_API_BASE}/api/files/download?thread_id={thread_id}&file_path={encoded}"
+    if token:
+        url += f"&token={token}"
+    return url
 
 
 # 获取文件相关的tools

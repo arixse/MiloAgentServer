@@ -12,12 +12,17 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+import io
+import urllib.parse
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from auth.dependencies import get_current_user
+import asyncio
+
+from auth.dependencies import get_current_user, get_current_user_from_query_or_header
 from deep_agent.graph import (
     cleanup_thread,
     get_or_create_agent,
@@ -26,6 +31,7 @@ from deep_agent.graph import (
     new_thread_id,
     save_thread_meta,
 )
+from deep_agent.opensandbox_backend import get_or_create_sandbox
 
 router = APIRouter(prefix="/api", tags=["LangGraph API"])
 
@@ -103,9 +109,11 @@ async def create_thread(
 ) -> ThreadInfo:
     """创建一个新的对话线程，绑定到当前认证用户。
 
-    线程元数据写入 MongoDB 持久化。首次调用 runs 时自动初始化 agent + sandbox。
+    线程元数据写入 MongoDB 持久化。同时在后台预创建 sandbox。
     """
     user_id = current_user["user_id"]
+    # 后台预创建 sandbox（fire-and-forget）
+    asyncio.create_task(get_or_create_sandbox(user_id))
     thread_id = new_thread_id()
     await save_thread_meta(thread_id, user_id=user_id, metadata=body.metadata)
     meta = await _get_owner_meta(thread_id)
@@ -116,8 +124,13 @@ async def create_thread(
 async def list_threads(
     current_user: dict = Depends(get_current_user),
 ) -> list[ThreadInfo]:
-    """返回当前认证用户的所有线程（从 MongoDB 读取，重启不丢失）。"""
+    """返回当前认证用户的所有线程（从 MongoDB 读取，重启不丢失）。
+
+    同时在后台预创建 sandbox，使后续的 state/runs 请求无需等待 sandbox 创建。
+    """
     user_id = current_user["user_id"]
+    # 后台预创建 sandbox（fire-and-forget），不阻塞线程列表响应
+    asyncio.create_task(get_or_create_sandbox(user_id))
     try:
         threads = await list_threads_by_user(user_id)
     except Exception as e:
@@ -169,7 +182,7 @@ async def run_agent(
     if not lc_messages:
         raise HTTPException(status_code=400, detail="至少需要一条 role=user 的消息")
 
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "token": current_user.get("access_token", "")}}
 
     try:
         agent = await get_or_create_agent(thread_id, user_id=user_id)
@@ -205,7 +218,7 @@ async def run_agent_stream(
     if not lc_messages:
         raise HTTPException(status_code=400, detail="至少需要一条 role=user 的消息")
 
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "token": current_user.get("access_token", "")}}
 
     async def event_stream():
         try:
@@ -270,12 +283,13 @@ async def get_state(
 ) -> StateResponse:
     """获取指定线程的当前状态（消息历史、变量等）。
 
-    线程元数据从 MongoDB 验证归属，状态从 MongoDB checkpoint 读取。
+    若 agent 已缓存则直接使用（sandbox 已在 list_threads/create_thread 时预创建），
+    否则从 checkpoint 直接读取作为降级路径。
     """
     user_id = current_user["user_id"]
     await _require_owner(thread_id, user_id)
 
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "token": current_user.get("access_token", "")}}
 
     try:
         agent = await get_or_create_agent(thread_id, user_id=user_id)
@@ -284,6 +298,49 @@ async def get_state(
         return StateResponse(thread_id=thread_id, user_id=user_id, values=values)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# File download — 直接通过 OpenSandbox API 读取文件并流式返回
+# =============================================================================
+
+@router.get("/files/download", summary="下载沙盒中的文件")
+async def download_file(
+    thread_id: str = Query(..., description="线程 ID（用于归属校验）"),
+    file_path: str = Query(..., description="沙盒中的文件路径，如 /tmp/report.pdf"),
+    current_user: dict = Depends(get_current_user_from_query_or_header),
+):
+    """从 OpenSandbox 沙盒中下载指定文件。
+
+    通过 sandbox.files.read_bytes() 直接读取，无需在沙盒内启动 HTTP 服务器。
+    文件名从路径中自动提取。
+    """
+    user_id = current_user["user_id"]
+    await _require_owner(thread_id, user_id)
+
+    try:
+        backend = await get_or_create_sandbox(user_id)
+        content = backend.sandbox.files.read_bytes(file_path)
+
+        filename = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
+        encoded_filename = urllib.parse.quote(filename, safe="")
+
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{encoded_filename}"',
+                "Content-Length": str(len(content)),
+            },
+        )
+    except Exception as e:
+        err_msg = str(e)
+        if "FILE_NOT_FOUND" in err_msg or "no such file" in err_msg:
+            raise HTTPException(
+                status_code=404,
+                detail=f"沙盒中未找到文件: {file_path}。文件可能已被删除或沙盒已重建。",
+            )
+        raise HTTPException(status_code=500, detail=f"文件下载失败: {e}")
 
 
 # =============================================================================

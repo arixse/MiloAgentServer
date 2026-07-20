@@ -12,7 +12,7 @@ Your personal AI assistant. Just chat with it to search for information, process
 - **Tool call visualization** — expandable tool call cards show args and results inline, in chronological order
 - **Skill system** — dynamic skill installation from URLs, auto-restored on sandbox rebuild
 - **JWT authentication** — user registration/login with thread-level isolation
-- **Persistent storage** — Redis for thread metadata, MongoDB for conversation history and long-term memory
+- **Persistent storage** — MongoDB for conversation history, long-term memory, and sandbox mappings
 - **Docker-first** — multi-stage build bundles frontend and backend into a single image
 
 ## Architecture
@@ -26,10 +26,10 @@ Your personal AI assistant. Just chat with it to search for information, process
                               ┌─────────────────────────┼─────────────────────┐
                               │                         │                     │
                          ┌────▼────┐             ┌──────▼──────┐       ┌─────▼──────┐
-                         │  Redis   │             │   MongoDB    │       │ OpenSandbox │
-                         │ metadata │             │ checkpoints  │       │ code exec   │
-                         │ sandbox  │             │ store/memory │       │ sandbox     │
-                         └─────────┘             └─────────────┘       └────────────┘
+                         │   MongoDB  │           │   MongoDB    │       │ OpenSandbox │
+                         │ checkpoints│          │ store/memory │       │ code exec   │
+                         │ thread meta│          │ sandbox map  │       │ sandbox     │
+                         └───────────┘           └─────────────┘       └────────────┘
 ```
 
 | Layer      | Technology                             | Purpose                                             |
@@ -39,7 +39,7 @@ Your personal AI assistant. Just chat with it to search for information, process
 | Agent      | LangGraph + DeepAgents                 | Multi-step reasoning, tool orchestration, subagents |
 | Checkpoint | MongoDB                                | Conversation history, agent state persistence       |
 | Memory     | MongoDB Store                          | Long-term user preferences at`/memories/`         |
-| Metadata   | Redis                                  | Thread list, sandbox mappings, skill records        |
+| Metadata   | MongoDB                                | Thread list, sandbox mappings, skill records        |
 | Sandbox    | OpenSandbox                            | Isolated shell commands, file I/O, code execution   |
 
 ## Quick start
@@ -47,7 +47,6 @@ Your personal AI assistant. Just chat with it to search for information, process
 ### Prerequisites
 
 - Python 3.11+ with [uv](https://docs.astral.sh/uv/) or pip
-- Redis (any version)
 - MongoDB 7+
 - [OpenSandbox](http://182.254.183.29:8080) server
 - Node.js 22+ (frontend development only)
@@ -168,7 +167,7 @@ Additional tools can be integrated via MCP (Model Context Protocol).
 │       └── lib/                             # TypeScript types and helpers
 ├── AGENTS.md                                # Agent system prompt and conventions
 ├── Dockerfile                               # Multi-stage build (frontend + backend)
-├── docker-compose.yml                       # Full stack (app + Redis + MongoDB)
+├── docker-compose.yml                       # Full stack (app + MongoDB)
 └── .github/workflows/build-image.yml        # CI: build on GitHub Release
 ```
 
@@ -194,7 +193,7 @@ cd MiloAgentServer
 cp .env.example .env
 # Edit .env with your API keys
 
-# Start all services (app + Redis + MongoDB)
+# Start all services (app + MongoDB)
 docker compose up -d
 ```
 
@@ -203,10 +202,9 @@ The app is available at **http://localhost:8000**. The compose file includes:
 | Service     | Image                                 | Port  |
 | ----------- | ------------------------------------- | ----- |
 | `app`     | `milo-agent:latest` (built locally) | 8000  |
-| `redis`   | `redis:7-alpine`                    | 6379  |
 | `mongodb` | `mongo:7`                           | 27017 |
 
-All services are connected via an internal `milo-net` bridge network. Redis and MongoDB data are persisted in named volumes.
+All services are connected via an internal `milo-net` bridge network. MongoDB data is persisted in named volumes.
 
 To update to a new version:
 
@@ -223,8 +221,7 @@ Creating a [GitHub Release](https://github.com/arixse/MiloAgentServer/releases) 
 # Pull the image
 docker pull ghcr.io/arixse/milo-agent-server:latest
 
-# Start Redis and MongoDB separately
-docker run -d --name milo-redis -p 6379:6379 redis:7-alpine
+# Start MongoDB
 docker run -d --name milo-mongo -p 27017:27017 mongo:7
 
 # Start the app
@@ -232,7 +229,6 @@ docker run -d \
   --name milo-agent \
   -p 8000:8000 \
   --env-file .env \
-  -e REDIS_HOST=host.docker.internal \
   -e MONGO_URI=mongodb://host.docker.internal:27017 \
   ghcr.io/arixse/milo-agent-server:latest
 ```
@@ -242,7 +238,7 @@ docker run -d \
 
 ### Option 3: Manual deployment
 
-**Prerequisites:** Python 3.11+, Node.js 22+, Redis, MongoDB.
+**Prerequisites:** Python 3.11+, Node.js 22+, MongoDB.
 
 ```bash
 # Build the frontend
@@ -286,8 +282,6 @@ server {
 | `MODEL_BASE_URL`              | No       |                               |
 | `OPENSANDBOX_SERVER_URL`      | Yes      |                               |
 | `OPENSANDBOX_API_KEY`         | Yes      | —                            |
-| `REDIS_HOST`                  | No       | `localhost`                 |
-| `REDIS_PORT`                  | No       | `6379`                      |
 | `MONGO_URI`                   | No       | `mongodb://localhost:27017` |
 | `MONGO_DB_NAME`               | No       | `MiloAgent`                 |
 | `JWT_SECRET_KEY`              | No       | auto-generated                |
@@ -300,7 +294,7 @@ server {
 
 - Each thread gets its own isolated OpenSandbox instance (`opensandbox/code-interpreter:v1.0.2`)
 - Sandboxes are automatically renewed in the background (default 24h timeout)
-- On server restart, sandboxes are reconnected via Redis mappings
+- On server restart, sandboxes are reconnected via MongoDB mappings
 - Thread deletion or server shutdown cleans up the associated sandbox
 - **pip** is automatically installed during sandbox initialization via a three-tier fallback (built-in pip → `ensurepip` → `apt-get`)
 
@@ -310,7 +304,7 @@ Skills are zip archives installed into the sandbox's `/skills/` directory:
 
 1. Agent calls `install_skill` with a skill name and download URL
 2. The zip is downloaded, uploaded to the sandbox, and extracted
-3. Installation records are persisted in Redis per user
+3. Installation records are persisted in MongoDB per user
 4. If a sandbox is destroyed and recreated, all skills are automatically restored
 
 > [!NOTE]

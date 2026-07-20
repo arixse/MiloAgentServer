@@ -10,7 +10,4 @@ build/
 dist/
 .langgraph_api/
 .DS_Store
-.claude/
-!.claude/CLAUDE.md
-!.claude/settings.json
 .idea

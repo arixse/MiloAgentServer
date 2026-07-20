@@ -43,10 +43,10 @@ export function ChatArea() {
               : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
             }
           `}
-          title={showToolCalls ? '隐藏详情' : '显示详情'}
+          // title={showToolCalls ? '隐藏详情' : '显示详情'}
         >
-          {showToolCalls ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-          <span>显示详情</span>
+          {/*{showToolCalls ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}*/}
+          {/*<span>显示详情</span>*/}
         </button>
       </div>
       <MessagesList showToolCalls={showToolCalls} />

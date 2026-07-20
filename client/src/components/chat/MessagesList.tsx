@@ -2,6 +2,7 @@ import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { useStream } from '../../hooks/useStream';
 import { HumanMessage } from './HumanMessage';
 import { AssistantMessage } from './AssistantMessage';
+import { MessageSkeleton } from './MessageSkeleton';
 import { getMessageText } from '../../lib/types';
 import { Wrench } from 'lucide-react';
 
@@ -10,13 +11,17 @@ interface MessagesListProps {
 }
 
 export function MessagesList({ showToolCalls }: MessagesListProps) {
-  const { messages, isLoading } = useStream();
+  const { messages, isLoading, isLoadingMessages } = useStream();
   const scrollRef = useAutoScroll(messages);
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6">
       <div className="max-w-3xl mx-auto space-y-6">
-        {messages.length === 0 && !isLoading && (
+        {/* Skeleton loading while fetching history */}
+        {isLoadingMessages && <MessageSkeleton />}
+
+        {/* Empty state — only when truly empty (not loading) */}
+        {messages.length === 0 && !isLoading && !isLoadingMessages && (
           <div className="text-center text-sm text-gray-400 py-12">
             发送一条消息开始对话
           </div>

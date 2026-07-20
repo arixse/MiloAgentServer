@@ -1,4 +1,4 @@
-# MiloAgent 项目指南
+                 # MiloAgent 项目指南
 
 ## 项目概述
 
@@ -14,7 +14,7 @@ MiloAgent 是一个基于 LangGraph / DeepAgents 的深度 AI Agent 服务，集
 | 代码沙盒 | OpenSandbox (阿里巴巴) |
 | 前端 | React + TypeScript + Vite + Bun |
 | 数据库 | MongoDB (checkpoint / store / 线程元数据) |
-| 缓存 | Redis (sandbox 映射 / skill 记录) |
+| 缓存 | 无（sandbox 映射已迁至 MongoDB） |
 | 对象存储 | MinIO |
 | 认证 | JWT (python-jose + bcrypt) |
 | 包管理 | uv |
@@ -52,7 +52,7 @@ MiloAgent/
 │       ├── contexts/                    # React Context（Auth/Stream/Thread）
 │       ├── hooks/                       # 自定义 hooks
 │       └── api/                         # API 客户端
-├── docker-compose.yml                   # 生产部署（app + redis + mongodb）
+├── docker-compose.yml                   # 生产部署（app + mongodb）
 ├── docker-compose.dev.yml               # 开发部署（本地构建）
 ├── Dockerfile                           # 多阶段构建（Bun 前端 + Python 后端）
 ├── pyproject.toml                       # Python 依赖 & 构建配置
@@ -85,7 +85,7 @@ git push origin main
   ├── 未命中 → _build_agent(user_id)
   │     ├── get_or_create_sandbox(user_id)     # 每个用户一个 sandbox
   │     │     ├── 内存缓存 _backends
-  │     │     ├── Redis 映射 → 尝试重连
+  │     │     ├── MongoDB 映射 → 尝试重连
   │     │     └── 都不行 → 创建新 sandbox + 初始化文件系统
   │     ├── CompositeBackend(
   │     │     default=OpenSandboxBackend,       # 代码执行
@@ -98,7 +98,7 @@ git push origin main
 ### Sandbox 持久化策略
 
 1. **内存缓存** — `_backends: dict[user_id, OpenSandboxBackend]`，进程级缓存
-2. **Redis 映射** — `user_id → sandbox_id`，用于跨重启重连
+2. **MongoDB 映射** — `user_id → sandbox_id`，用于跨重启重连
 3. **MongoDB 备份** — 关键文件（AGENTS.md, memories/）在 sandbox 销毁前备份
 
 ### 线程归属
@@ -132,7 +132,6 @@ uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 关键配置项（详见 `.env.example`）：
 - `MODEL_NAME` / `MODEL_BASE_URL` / `MODEL_API_KEY` — 模型配置
 - `OPENSANDBOX_SERVER_URL` / `OPENSANDBOX_API_KEY` — 沙盒服务
-- `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` — Redis
 - `MONGO_URI` / `MONGO_USERNAME` / `MONGO_PASSWORD` — MongoDB
 - `JWT_SECRET_KEY` — JWT 签名密钥
 - `TAVILY_API_KEY` — 搜索工具
