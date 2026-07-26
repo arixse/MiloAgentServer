@@ -21,6 +21,7 @@ from deepagents.backends.sandbox import BaseSandbox
 from opensandbox import Sandbox, SandboxSync
 from dotenv import load_dotenv
 from opensandbox.config import ConnectionConfig, ConnectionConfigSync
+from opensandbox.exceptions.sandbox import SandboxApiException
 from opensandbox.models.execd import RunCommandOpts
 from pymongo import MongoClient
 
@@ -131,6 +132,11 @@ class OpenSandboxBackend(BaseSandbox):
                 try:
                     self.sandbox.renew(renew_timeout)
                     logger.debug("renew 成功: %s (timeout=%sh)", self.sandbox.id, self._timeout_hours)
+                except SandboxApiException as e:
+                    status = getattr(e, 'status_code', 0)
+                    logger.warning("renew 失败 (sandbox 已失效 %s): %s: %s", status, self.sandbox.id, e)
+                    self._invalidate()
+                    return  # Stop renewing, sandbox is gone
                 except Exception as e:
                     logger.warning("renew 失败: %s: %s", self.sandbox.id, e)
 
@@ -158,6 +164,25 @@ class OpenSandboxBackend(BaseSandbox):
     def id(self) -> str:
         return self.sandbox.id
 
+    def _invalidate(self) -> None:
+        """Invalidate this backend — sandbox is no longer reachable.
+
+        Stops the renew loop and removes self from the global cache so the
+        next call to ``get_or_create_sandbox()`` creates a fresh sandbox.
+        """
+        self._stop_renew_loop()
+        if self._user_id and _backends.get(self._user_id) is self:
+            _backends.pop(self._user_id, None)
+            logger.warning("已从缓存移除失效 sandbox: user=%s sandbox=%s", self._user_id, self.sandbox.id)
+            # Fire-and-forget cleanup of the stale MongoDB mapping
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(_delete_sandbox_mapping(self._user_id))
+            except RuntimeError:
+                pass
+
     def execute(
             self,
             command: str,
@@ -165,12 +190,21 @@ class OpenSandboxBackend(BaseSandbox):
             timeout: int | None = None,
     ) -> ExecuteResponse:
         """Execute a shell command inside the sandbox."""
-        result = self.sandbox.commands.run(
-            command,
-            opts=RunCommandOpts(
-                timeout=timedelta(seconds=timeout) if timeout else None,
+        try:
+            result = self.sandbox.commands.run(
+                command,
+                opts=RunCommandOpts(
+                    timeout=timedelta(seconds=timeout) if timeout else None,
+                )
             )
-        )
+        except SandboxApiException as e:
+            status = getattr(e, 'status_code', 0)
+            if status in (404, 502, 503):
+                self._invalidate()
+                raise RuntimeError(
+                    f"沙盒实例已失效（{status}），请重试当前操作，系统将自动创建新的沙盒。"
+                ) from e
+            raise
         output = result.logs.stdout[0].text if result.logs.stdout else ''
         if result.logs.stderr:
             output += f"\n<stderr>{result.logs.stderr[0].text}</stderr>"
@@ -183,8 +217,16 @@ class OpenSandboxBackend(BaseSandbox):
         """Download files from the sandbox."""
         responses = []
         for path in paths:
-            content = self.sandbox.files.read_bytes(path)
-            responses.append(FileDownloadResponse(path=path, content=content, error=None))
+            try:
+                content = self.sandbox.files.read_bytes(path)
+                responses.append(FileDownloadResponse(path=path, content=content, error=None))
+            except SandboxApiException as e:
+                status = getattr(e, 'status_code', 0)
+                if status in (404, 502, 503):
+                    self._invalidate()
+                responses.append(FileDownloadResponse(
+                    path=path, content=b'', error=f"沙盒已失效，请重试操作"
+                ))
         return responses
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
@@ -194,8 +236,14 @@ class OpenSandboxBackend(BaseSandbox):
             if not path.startswith("/"):
                 responses.append(FileUploadResponse(path=path, error="invalid_path"))
                 continue
-            self.sandbox.files.write_file(path, content)
-            responses.append(FileUploadResponse(path=path, error=None))
+            try:
+                self.sandbox.files.write_file(path, content)
+                responses.append(FileUploadResponse(path=path, error=None))
+            except SandboxApiException as e:
+                status = getattr(e, 'status_code', 0)
+                if status in (404, 502, 503):
+                    self._invalidate()
+                responses.append(FileUploadResponse(path=path, error="沙盒已失效，请重试操作"))
         return responses
 
     def close(self) -> None:
