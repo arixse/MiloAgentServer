@@ -19,7 +19,7 @@ export function Header() {
 
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
-          <Avatar name={user?.username || 'U'} size="sm" />
+          <Avatar name={user?.username || 'U'} src={user?.avatar_url} size="sm" />
           <span className="text-sm text-gray-600 hidden sm:block">{user?.username}</span>
         </div>
         <Button variant="ghost" size="sm" onClick={logout}>

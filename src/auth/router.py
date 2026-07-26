@@ -44,6 +44,11 @@ def _get_users_collection() -> Collection:
     return _users_collection
 
 
+def get_users_collection() -> Collection:
+    """Public accessor for the users collection (used by oauth.py)."""
+    return _get_users_collection()
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -91,6 +96,13 @@ async def login(body: UserLogin):
             detail="用户名或密码错误",
         )
 
+    # Reject password login for GitHub OAuth users
+    if user_doc.get("provider") == "github":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="该账号使用 GitHub 登录，请点击 GitHub 按钮登录",
+        )
+
     if not verify_password(body.password, user_doc["hashed_password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -117,4 +129,5 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         user_id=user_doc["user_id"],
         username=user_doc["username"],
         created_at=user_doc.get("created_at", ""),
+        avatar_url=user_doc.get("avatar_url"),
     )

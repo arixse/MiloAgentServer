@@ -66,6 +66,7 @@ interface AuthContextValue {
   register: (username: string, password: string) => Promise<void>;
   logout: () => void;
   clearError: () => void;
+  handleOAuthCallback: (token: string, user: UserInfo) => void;
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null);
@@ -123,6 +124,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'AUTH_FAILURE', payload: '' });
   }, []);
 
+  const handleOAuthCallback = useCallback((token: string, user: UserInfo) => {
+    dispatch({ type: 'AUTH_SUCCESS', payload: { user, token } });
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -134,6 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         register,
         logout,
         clearError,
+        handleOAuthCallback,
       }}
     >
       {children}

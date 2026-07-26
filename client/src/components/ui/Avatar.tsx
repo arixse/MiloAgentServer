@@ -2,13 +2,25 @@ import { cn } from '../../lib/cn';
 
 interface AvatarProps {
   name: string;
+  src?: string | null;
   size?: 'sm' | 'md';
   className?: string;
 }
 
-export function Avatar({ name, size = 'md', className }: AvatarProps) {
+export function Avatar({ name, src, size = 'md', className }: AvatarProps) {
   const initials = name.slice(0, 2).toUpperCase();
   const sizeClass = size === 'sm' ? 'w-7 h-7 text-xs' : 'w-9 h-9 text-sm';
+
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt={name}
+        className={cn('rounded-full object-cover shrink-0', sizeClass, className)}
+        title={name}
+      />
+    );
+  }
 
   return (
     <div

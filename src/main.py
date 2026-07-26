@@ -21,6 +21,7 @@ from pymongo import MongoClient
 from starlette.responses import FileResponse, Response
 
 from api.chat import router as agent_router
+from auth.oauth import router as oauth_router
 from auth.router import init_auth_mongo, router as auth_router
 from deep_agent.graph import cleanup_all
 
@@ -123,6 +124,7 @@ async def log_requests(request: Request, call_next) -> Response:
 
 # API 路由（先注册，优先匹配）
 app.include_router(auth_router)
+app.include_router(oauth_router)
 app.include_router(agent_router)
 
 # ---------------------------------------------------------------------------
