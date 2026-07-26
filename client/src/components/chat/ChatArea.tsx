@@ -4,8 +4,6 @@ import { useStream } from '../../hooks/useStream';
 import { MessagesList } from './MessagesList';
 import { ChatInput } from './ChatInput';
 import { EmptyState } from './EmptyState';
-import { Eye, EyeOff } from 'lucide-react';
-
 export function ChatArea() {
   const { activeThreadId } = useThreads();
   const { isLoading, submit, stop, loadMessages } = useStream();
