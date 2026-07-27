@@ -13,17 +13,17 @@ export function OAuthCallback() {
     const error = searchParams.get('error');
 
     if (error) {
-      window.location.replace(`/login?error=${encodeURIComponent(error)}`);
+      window.location.replace(`/?error=${encodeURIComponent(error)}`);
       return;
     }
 
     if (token && user_id && username) {
-      // Save token to localStorage, then hard-redirect to / so AuthProvider
+      // Save token to localStorage, then hard-redirect to /chat so AuthProvider
       // re-initializes with the token and validates it via getMe().
       localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, token);
-      window.location.replace('/');
+      window.location.replace('/chat');
     } else {
-      window.location.replace('/login');
+      window.location.replace('/');
     }
   }, []);
 
