@@ -2,21 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
-
-
-class UserCreate(BaseModel):
-    """Registration request body."""
-
-    username: str = Field(..., min_length=2, max_length=50, description="用户名")
-    password: str = Field(..., min_length=4, max_length=128, description="密码")
-
-
-class UserLogin(BaseModel):
-    """Login request body."""
-
-    username: str = Field(..., description="用户名")
-    password: str = Field(..., description="密码")
+from pydantic import BaseModel
 
 
 class TokenResponse(BaseModel):

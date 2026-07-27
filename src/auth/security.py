@@ -1,11 +1,10 @@
-"""JWT token & password hashing utilities."""
+"""JWT token utilities."""
 
 from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
 
-import bcrypt
 from jose import JWTError, jwt
 
 # ---------------------------------------------------------------------------
@@ -14,19 +13,6 @@ from jose import JWTError, jwt
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "milo-agent-dev-secret-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
-
-
-# ---------------------------------------------------------------------------
-# Password hashing
-# ---------------------------------------------------------------------------
-def hash_password(plain: str) -> str:
-    """Hash a plain-text password with bcrypt."""
-    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    """Verify a plain-text password against a bcrypt hash."""
-    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
