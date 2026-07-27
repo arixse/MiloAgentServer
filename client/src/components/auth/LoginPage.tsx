@@ -1,53 +1,8 @@
-import { useState, type FormEvent } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useAuth } from '../../hooks/useAuth';
-import { Button } from '../ui/Button';
-import { Input } from '../ui/Input';
-import { Spinner } from '../ui/Spinner';
-
-type Tab = 'login' | 'register';
+import { useSearchParams } from 'react-router-dom';
 
 export function LoginPage() {
-  const { login, register, error, isLoading, clearError } = useAuth();
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const oauthError = searchParams.get('error');
-  const [tab, setTab] = useState<Tab>('login');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [localError, setLocalError] = useState('');
-
-  const switchTab = (t: Tab) => {
-    setTab(t);
-    setLocalError('');
-    clearError();
-  };
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setLocalError('');
-
-    if (!username.trim() || !password.trim()) {
-      setLocalError('请输入用户名和密码');
-      return;
-    }
-    if (password.length < 4) {
-      setLocalError('密码至少需要4个字符');
-      return;
-    }
-
-    try {
-      if (tab === 'login') {
-        await login(username.trim(), password);
-      } else {
-        await register(username.trim(), password);
-      }
-      // 登录/注册成功后跳转到聊天界面
-      navigate('/', { replace: true });
-    } catch {
-      // Error is handled by AuthContext
-    }
-  };
 
   const oauthErrorMessages: Record<string, string> = {
     access_denied: 'GitHub 授权已取消',
@@ -56,7 +11,7 @@ export function LoginPage() {
     user_fetch_failed: '获取 GitHub 用户信息失败',
     server_error: '服务器错误，请稍后重试',
   };
-  const displayError = localError || error || (oauthError ? oauthErrorMessages[oauthError] || oauthError : '');
+  const displayError = oauthError ? oauthErrorMessages[oauthError] || oauthError : '';
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
@@ -72,72 +27,17 @@ export function LoginPage() {
           <p className="text-sm text-gray-500 mt-1">智能对话助手</p>
         </div>
 
-        {/* Form Card */}
+        {/* Login Card */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-          {/* Tabs */}
-          <div className="flex mb-6 bg-gray-100 rounded-lg p-0.5">
-            <button
-              onClick={() => switchTab('login')}
-              className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer ${
-                tab === 'login' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              登录
-            </button>
-            <button
-              onClick={() => switchTab('register')}
-              className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer ${
-                tab === 'register' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              注册
-            </button>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">用户名</label>
-              <Input
-                type="text"
-                placeholder="请输入用户名"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoFocus
-                autoComplete="username"
-              />
+          {displayError && (
+            <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 mb-4">
+              {displayError}
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">密码</label>
-              <Input
-                type="password"
-                placeholder="请输入密码"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
-              />
-            </div>
+          )}
 
-            {displayError && (
-              <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-                {displayError}
-              </div>
-            )}
-
-            <Button type="submit" className="w-full" size="lg" disabled={isLoading}>
-              {isLoading ? <Spinner size="sm" className="mr-2" /> : null}
-              {isLoading ? (tab === 'login' ? '登录中...' : '注册中...') : tab === 'login' ? '登录' : '注册'}
-            </Button>
-          </form>
-
-          {/* GitHub OAuth button */}
-          <div className="relative my-5">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-200" />
-            </div>
-            <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-white text-gray-500">或</span>
-            </div>
-          </div>
+          <p className="text-sm text-gray-500 text-center mb-4">
+            请使用 GitHub 账号登录以继续
+          </p>
 
           <button
             onClick={() => {
